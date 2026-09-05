@@ -17,7 +17,11 @@ which is also where every release up to and including v0.13.1 now lives.
   when the window is focused and the tab visible - and in a backgrounded Android WebView BOTH are
   permanently true, so a phone sitting in a pocket with a conversation selected kept marking
   messages read and telling the sender so. Same root cause as the notification below, same fix: the
-  gate now also asks the Android activity whether it is actually on screen.
+  gate now also asks the Android activity whether it is actually on screen. **This half is pinned by
+  tests and is owed a hardware pass** - the notification half was verified on the device, and the
+  fact both read was measured flipping correctly there, but the watermark path itself has not been
+  watched on hardware; the probe that would do it needs the peer's view of the read state rather
+  than a count of the sender's frames (`backlog.md`).
 
 - **A phone in a pocket was never told about a message it had already received.** The app keeps its
   WebSocket while backgrounded, so it receives the message and ACKNOWLEDGES it - and the server

@@ -1694,6 +1694,37 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
+### P3 - the read-receipt half of the visibility fix is unit-tested and OWED a hardware pass, and the probe that would give it needs a different precondition (2026-09-05)
+
+The notification half was verified on the device (shade carries the decrypted text 2 218 ms after
+the send, LIFE-2 `FAIL` -> `PASS`). **The read-watermark half was not**, and it is the same one-term
+guard reading the same `isAppInForeground()` whose value WAS measured flipping correctly on hardware
+(`{"foreground":false}` backgrounded, `true` in front) - so the residual risk is that the watermark
+path behaves differently, not that the fact is wrong.
+
+**Two instrument problems stopped the probe, and both are worth having written down.**
+
+**`openConversation` CANNOT BE A PRECONDITION ON A PHONE THAT IS ALREADY IN THE CONVERSATION.** It
+waits for the peer's row in the SIDEBAR, and on a mobile layout the list and the conversation are
+different screens - so it reported `listedEntries: 0` for three and a half minutes about a client
+sitting inside the very DM it wanted. A screenshot settled it in one look: the app was in the
+conversation, showing every probe message including the one the probe thought had gone nowhere. **It
+was one step from being filed as "the phone's sidebar comes back empty after a reinstall"**, against
+an app doing exactly the right thing. The rig's own rule - LOOK AT THE SCREEN when something does
+not work - is what caught it.
+
+**And a raw `/api/mls/send` count is the wrong observable.** The watermark is an MLS control frame
+among other control frames, so the count cannot name it; and the probe's own positive control came
+back ZERO in the foreground, where a watermark IS owed, which correctly made the whole run
+`INCONCLUSIVE` rather than a pass. Whether that zero is "already at its target" (`if (target <=
+held) return`), a watermark sent before the observer attached, or a path this probe does not see, is
+not established.
+
+**What a real row needs**: the peer's view, not the sender's traffic. W2 holds the read state for
+its own message, and that is the fact a user cares about - `A1 read it` appearing for a message
+nobody looked at. That is one DOM read on W2 against a marker, and it is falsifiable in both
+directions without counting anything.
+
 ### P2 - eleven more decisions read a visibility API that lies on every phone, and two of them look like they matter (measured 2026-09-05)
 
 `document.visibilityState` and `document.hasFocus()` are both permanently true in a backgrounded
