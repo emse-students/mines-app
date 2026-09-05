@@ -648,6 +648,10 @@ export abstract class BaseMlsService implements IMlsService {
           `[ACK] ${messageIds.length} id(s) dropped: they were queued for ${issuedFor} and this` +
             ` service is now ${this.userId}. The rows stay on the server for that account's next pull`
         );
+        // AND THEY ARE UNACKNOWLEDGED, which is the same fact a thrown ack records. Without this the
+        // repeat these rows will provoke would be ACCUSED - the shape reserved for a pull that
+        // overtook a landed ack - when the honest reading is that nothing ever acknowledged them.
+        for (const id of messageIds) this.unacknowledged.add(id);
         return;
       }
       try {

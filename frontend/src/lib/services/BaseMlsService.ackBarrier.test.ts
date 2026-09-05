@@ -192,7 +192,7 @@ describe('the ack barrier in front of a pull', () => {
     const grumble = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const note = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const said = (spy: ReturnType<typeof vi.spyOn>) =>
-      spy.mock.calls.map((c) => String(c[0])).join(' | ');
+      (spy.mock.calls as unknown[][]).map((c) => String(c[0])).join(' | ');
 
     // A row acknowledged by an ack that could NOT be delivered: the server really does still hold
     // it, so its repeat is the consequence of the `[ACK]` failure and must not be a second finding.
