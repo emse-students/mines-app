@@ -268,25 +268,17 @@ describe('handleHistoryRequest - the state key', () => {
     expectSilence();
   });
 
-  it('goes on to the diff when the digest it asked for arrives', async () => {
-    // The second leg of ONE solicitation: the digest lands on the same rendezvous, and the exchange
-    // continues exactly as it would have with a digest sent up front.
+  it('asks for a digest and ENDS - the answer is an event, not a continuation', async () => {
+    // The second leg used to block here for `DIGEST_TTL_MS` and give up. It waits for nothing now:
+    // the digest carries the manifest and the window, so it is answered wherever it lands - see
+    // `systemMessageHandler`'s `history_digest` branch and the solicitation cases below.
     await postKey([rows[0]]);
-    const params = baseParams({ storage: storageWith(rows) });
-    sendHistoryDigestRequest.mockImplementationOnce(async () => {
-      noteProbeReceived(GROUP, REQUESTER, {
-        kind: 'digest',
-        digest: await buildHistoryDigest([rows[0]]),
-        since: 0,
-      });
-    });
 
-    await handleHistoryRequest(params);
+    await handleHistoryRequest(baseParams({ storage: storageWith(rows) }));
 
-    expect(sendHistoryBundleForIds).toHaveBeenCalledWith(GROUP, ['m2'], expect.anything(), {
-      to: REQUESTER,
-      since: 0,
-    });
+    expect(sendHistoryDigestRequest).toHaveBeenCalled();
+    expect(sendHistoryBundleForIds).not.toHaveBeenCalled();
+    expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(true);
   });
 });
 
@@ -465,7 +457,7 @@ describe('handleHistoryRequest - the solicitation outlives the wait', () => {
    * to die there and nothing retried it, so the conversation settled READY and three messages short,
    * for ever. What makes the late digest answerable is that this device still knows it asked.
    */
-  it('records an outstanding solicitation, which SURVIVES a wait that ended with nothing', async () => {
+  it('records an outstanding solicitation, so the digest is answerable whenever it comes', async () => {
     noteProbeReceived(GROUP, REQUESTER, { kind: 'state', key: 'ffff', since: 0 });
 
     await handleHistoryRequest(baseParams({ probeWaitMs: 1 }));
@@ -474,14 +466,9 @@ describe('handleHistoryRequest - the solicitation outlives the wait', () => {
     expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(true);
   });
 
-  it('spends it when the digest DID arrive, so the late road cannot answer the same ask twice', async () => {
-    // The probe is set aside by `notBefore` and used at the deadline, which is the timely path from
-    // this module's point of view: the exchange completed here, so nothing is left outstanding.
-    noteProbeReceived(GROUP, REQUESTER, {
-      kind: 'state',
-      key: 'ffff',
-      since: 0,
-    });
+  it('answers a digest that arrives WITHOUT a state leg inline, and leaves nothing outstanding', async () => {
+    // A device that goes straight to a digest is answered here and now: there was no request of
+    // ours to record, so nothing is left for the late road to find and answer a second time.
     noteProbeReceived(GROUP, REQUESTER, {
       kind: 'digest',
       digest: await buildHistoryDigest([]),

@@ -21,6 +21,20 @@ describe('fetchUserProfile', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    // THE CACHE IS KEYED ON `Date.now()` AND THE WINDOW IS THIRTY SECONDS, so a case asserting "one
+    // request for three callers" is asserting that three awaited rejections happen inside it. That
+    // held every time this file ran alone and failed twice in the full suite, where a worker under
+    // contention can be descheduled for longer than the window it is standing in - the flake was the
+    // wall clock, not the cache. Frozen here so the assertion is about the code (durable-rules:
+    // never assert a wall clock in a test).
+    // ONLY `Date`. Faking every timer stalled the suite - the module's own awaits never resolved
+    // and each case timed out at 5 s. The cache reads a CLOCK, not a timer, so that is the only
+    // thing that has to hold still.
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('asks ONCE for a user the server says does not exist', async () => {

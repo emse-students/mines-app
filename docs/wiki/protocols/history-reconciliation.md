@@ -427,6 +427,16 @@ again. It terminates on the proof the server already delivers - `no_peer_online`
 reused rather than a new one. One member per step, the set only grows, and forty unreadable frames on
 a group with two online members cost two elections and then a fact.
 
+**AND THE EXCLUSION IT WALKS ON HAD NEVER WORKED.** The first run of the escalation asked the
+server nine times to skip the sleeping phone and was handed it back every time. The server filtered
+the exclusion list with `k.length <= 128`, and a member key - `userId:deviceId`, a 64-character hex
+digest plus a device id that repeats it - is **147 characters for a browser and 149 for the phone**.
+Every key was dropped in silence. So the fourth trigger's termination argument, *each step of the
+walk removes exactly one member*, had been inert since it shipped: the walk removed nobody, and the
+client's guard against a server that ignores an exclusion stopped it instead. Fixed with a cap
+measured against a real key, a warning when an exclusion cannot be used, and a test whose fixture is
+the shape this platform issues rather than `ua:da`.
+
 **What is still open is that SILENCE CARRIES TWO MEANINGS.** *We agree* and *nobody answered* are the
 same observation, which is why the escalation has to be gated on local evidence instead of on the
 absence of a reply. Making the agreeing responder ack would cost one frame per group per ask - the

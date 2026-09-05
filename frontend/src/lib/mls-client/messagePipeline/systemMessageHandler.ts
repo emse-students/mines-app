@@ -255,9 +255,11 @@ export async function handleSystemEvent(
     // leg is a group broadcast, so every member records it, and only the one that ASKED consumes an
     // outstanding solicitation and answers. The election still elects exactly one responder.
     if (!takenByAWaiter && takeDigestSolicitation(convoKey, from)) {
-      log(
-        `[HISTORY_DIGEST] ${senderNorm} answered our request for ${convoKey.slice(0, 8)}… after the wait had ended - answering it anyway`
-      );
+      // SILENT, because this IS the road now and it says nothing a reader can act on. The line above
+      // reports the digest, and `[HISTORY_REQ] ... diff with <them>` reports what it produced; a
+      // third line between them announced a road that no longer has an alternative, once per group
+      // per enrolment.
+      //
       // OUR MAILBOX FIRST, for the same reason every other store read in this file waits: a diff
       // resolved mid-drain names what we hold SO FAR and tells the asker that is all there is.
       answerAfterMailboxDrained(mlsService, () =>

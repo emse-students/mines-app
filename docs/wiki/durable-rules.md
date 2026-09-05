@@ -604,7 +604,10 @@ The link-preview pipeline, the SSRF guard, the favicon cascade and the undici se
 - **A STUB THAT ANSWERS ANY URL TESTS EVERYTHING EXCEPT WHAT A CLIENT CALL GETS WRONG.** Six tests around one internal call stayed green while it answered 401 on production, because `fetch` was mocked by status and body and never by ADDRESS. Assert the URL, or the suite is testing the parser. [development](development.md)
 - **A GUARD THAT STOPS FAILING OPEN STARTS REPORTING WHAT WAS ALWAYS BROKEN** - and it looks like a regression on the day it lands. Read the new failure as the measurement it is, and expect it to name a second fault under the first. [api-surface](protocols/api-surface.md#internal-cross-service-calls)
 
-## Contracts the compiler does not check -> [development](development.md)
+## Contracts the compiler does not check
+
+- **A TEST FIXTURE SHORTER THAN EVERY REAL VALUE CANNOT FAIL A LENGTH BOUND.** `notifyHistoryRequest` capped a member key at 128 characters; a real one is 147 for a browser and 149 for the phone, so the exclusion list silently excluded nobody and a whole termination argument - *each step of the walk removes one member* - was inert in production. Thirteen tests covered that endpoint and every one of them used `ua:da`. **Where a bound is a LENGTH, the fixture must be the shape the system actually issues, and the test asserts the length before it asserts the behaviour.** The same reading applies to any bound on a value's size, count or depth. And the number itself came from `MAX_HISTORY_EXCLUSIONS` two lines above: **two limits that look alike and count different things is how a wrong one survives review** - one bounded how MANY keys, the other how LONG one is. [history-reconciliation](protocols/history-reconciliation.md)
+ -> [development](development.md)
 
 Every unchecked seam - Tauri command names, plugin ACLs, `push_context.json`, `mlsWorkerProtocol.ts`,
 `LoginErrorCode` - is enumerated on [development](development.md#contracts-the-compiler-does-not-check).

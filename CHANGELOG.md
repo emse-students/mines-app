@@ -13,6 +13,20 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **The history election has never been able to skip a member, because the cap on a member key was
+  shorter than every key this platform issues.** `notifyHistoryRequest` filtered the exclusion list
+  with `k.length <= 128`. A member key is `userId:deviceId`, where the user id is a 64-character hex
+  digest and the device id repeats it - **147 characters for a browser, 149 for the phone**, both
+  measured. Every one was dropped, silently. So the exclusion list excluded nobody, and the coverage
+  chase - whose entire termination argument is *"each step of the walk removes exactly one member"* -
+  could not remove one; the client's own guard against a server that ignores an exclusion fired
+  instead and stopped the walk. Found by HEAL-REVOKE-7, which asked the server nine times to skip a
+  sleeping phone and was handed it back every time. The number came from `MAX_HISTORY_EXCLUSIONS`
+  sitting beside it, two limits that look alike and count different things. **No test could have
+  caught it**: every fixture in the spec uses `ua:da`, and a fixture shorter than every real value
+  cannot fail a length bound - the new one is a real-shaped key that asserts its own length first.
+  An exclusion that cannot be used is now logged rather than dropped in silence.
+
 - **A returning device asked one member for its missing history, that member was a frozen phone, and
   nothing ever asked anybody else.** The delivery service elects a RANDOM online member to answer a
   history solicitation, and says why in its own comment: a backgrounded Android holds its WebSocket

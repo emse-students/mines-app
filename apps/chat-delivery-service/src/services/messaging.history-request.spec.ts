@@ -16,6 +16,7 @@ import { RevokedDevice } from '../entities/revoked-device.entity';
 
 describe('MessagingService - notifyHistoryRequest', () => {
   let service: MessagingService;
+  let warn: jest.SpyInstance;
 
   const redis = {
     smembers: jest.fn(),
@@ -73,6 +74,11 @@ describe('MessagingService - notifyHistoryRequest', () => {
       ],
     }).compile();
     service = module.get(MessagingService);
+    // The service logs through Nest's own logger; the one case that asserts on a warning needs to
+    // read it, and every other case needs it quiet.
+    warn = jest
+      .spyOn((service as unknown as { logger: { warn: (m: string) => void } }).logger, 'warn')
+      .mockImplementation(() => {});
   });
 
   it('forwards to an online member and reports it as the target', async () => {
@@ -150,6 +156,43 @@ describe('MessagingService - notifyHistoryRequest', () => {
     const res = await service.notifyHistoryRequest('reqU', { ...body, exclude: ['ua:da'] });
 
     expect(res).toEqual({ status: 'forwarded', target: 'ub:db' });
+  });
+
+  it('excludes a member key of the length this platform actually issues', async () => {
+    /**
+     * EVERY OTHER CASE IN THIS FILE USES `ua:da`, AND THAT IS HOW THE BOUND HID.
+     *
+     * A real member key is `userId:deviceId` where the user id is a 64-character hex digest and the
+     * device id repeats it - 147 characters for a browser, 149 for the phone. The filter accepted
+     * `k.length <= 128`, so it dropped every key this server has ever issued, silently, and the
+     * exclusion list excluded nobody. Measured 2026-09-05 by HEAL-REVOKE-7: nine elections, the same
+     * sleeping phone returned each time, and the client stopping its walk against what looked like a
+     * server that ignores exclusions.
+     *
+     * A fixture shorter than every real value cannot fail a length bound. This one is a real value.
+     */
+    const user = 'f'.repeat(64);
+    const phone = `${user}:tauri-${user}-mtn445lg-25sy`;
+    const browser = `${user}:web-${user}-mtovytv0-9qx8`;
+    expect(phone.length).toBeGreaterThan(128);
+    redis.smembers.mockResolvedValue([phone, browser]);
+    redis.exists.mockResolvedValue(1);
+
+    const res = await service.notifyHistoryRequest('reqU', { ...body, exclude: [phone] });
+
+    expect(res).toEqual({ status: 'forwarded', target: browser });
+  });
+
+  it('says how many exclusions it could not use, instead of dropping them in silence', async () => {
+    redis.smembers.mockResolvedValue(['ua:da']);
+    redis.exists.mockResolvedValue(1);
+
+    await service.notifyHistoryRequest('reqU', {
+      ...body,
+      exclude: ['no-colon-here', 'x'.repeat(300) + ':d', 'ua:da'],
+    });
+
+    expect(warn.mock.calls.flat().join(' ')).toContain('2 exclusion(s) were unusable');
   });
 
   it('matches an exclusion case-insensitively, because the client keys it off its MLS identity', async () => {

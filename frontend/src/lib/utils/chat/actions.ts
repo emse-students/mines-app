@@ -21,7 +21,6 @@ import {
   digestIdentity,
   DIGEST_TTL_MS,
   noteDigestSolicited,
-  takeDigestSolicitation,
 } from '$lib/utils/chat/historyDigestRendezvous';
 import { answerHistoryDigest, stateOurCoverage } from '$lib/utils/chat/historyDiffAnswer';
 import { pendingGroupExitIds } from '$lib/utils/chat/pendingGroupExits';
@@ -1226,28 +1225,27 @@ export async function handleHistoryRequest(params: {
 
     // Same rule for the second leg, dated from OUR request rather than from the election: a digest
     // that predates the request cannot be an answer to it.
-    const askedAt = Date.now();
-    // RECORDED BEFORE THE ASK GOES OUT, so a digest that overtakes this line still finds it. What it
-    // buys is that the wait below is no longer the only thing that can answer: a digest arriving
-    // after it ends is picked up by the system handler and answered there, because the answer needs
-    // nothing this scope holds. See `takeDigestSolicitation`.
-    noteDigestSolicited(groupId, requesterIdentity, askedAt);
+    // THE SECOND LEG DOES NOT WAIT, AND THERE IS NOTHING LEFT FOR IT TO WAIT FOR.
+    //
+    // It used to send this request and then block on `awaitProbe` for `DIGEST_TTL_MS`, ending the
+    // exchange if the digest was late. That deadline cost three messages permanently on 2026-09-05:
+    // the asker answers only once its own mailbox has drained, and a device that has just rejoined
+    // an account is applying every group's external join at once - 67 s against a 60 s wait.
+    //
+    // The digest needs no continuation because it needs no memory: it carries the manifest and the
+    // window, our store carries the rest. So the solicitation is recorded and this leg ENDS. The
+    // frame is answered wherever it lands, by `systemMessageHandler` - one road instead of two, and
+    // no line claiming an exchange failed while the repair was still on its way. On a device joining
+    // twenty-five groups the old wait produced nine such lines per enrolment and repaired every one
+    // of them seconds later.
+    //
+    // NOTHING IS LOGGED HERE. `[HISTORY_STATE] Keys differ ... asked <them> to describe` is written
+    // one branch above by this same device, and the outcome arrives as `diff with <them>: N to send`
+    // - one ask, one answer, per group. A third line saying the ask was made was pure duplication,
+    // and on a device joining twenty-nine groups it was twenty-nine of them.
+    noteDigestSolicited(groupId, requesterIdentity);
     await sendHistoryDigestRequest(groupId, { from: selfIdentity, to: requesterIdentity }, deps);
-    const answer = await awaitProbe(groupId, requesterIdentity, probeWaitMs, askedAt);
-    if (answer?.kind !== 'digest') {
-      // NOT A LOST REPAIR ANY MORE, and the line says so: the solicitation outlives this wait. It
-      // used to end the exchange, and a device whose queue took 67 s to drain against this 60 s
-      // wait lost three messages for ever - measured 2026-09-05, HEAL-REVOKE-5 and -7.
-      log(
-        `[HISTORY_REQ] ${short}... asked ${requesterIdentity} to describe itself, no digest came within ${probeWaitMs}ms - the solicitation stays open`
-      );
-      return;
-    }
-    // ANSWERED IN TIME, so the standing solicitation is spent here rather than left for the late
-    // road to find: one ask is answered once, and a second digest from this device is a new
-    // exchange needing a new ask.
-    takeDigestSolicitation(groupId, requesterIdentity);
-    probe = answer;
+    return;
   }
 
   const { digest, since } = probe;

@@ -125,6 +125,7 @@ import {
   evaluate,
   openConversation,
   pollFact,
+  sample,
   send,
   settledCount,
 } from "../chat.mjs";
@@ -342,7 +343,25 @@ const MESSAGES_WHILE_AWAY = 3;
  * with the same patience - the whole point of an equality - and so a device that never gets there
  * reports a bound rather than a snapshot.
  */
-const MESSAGE_BUDGET_MS = 60_000;
+const MESSAGE_BUDGET_MS = 300_000;
+
+/*
+ * THREE MINUTES, AND IT WAS SIXTY SECONDS UNTIL THE REPAIR STARTED WORKING (2026-09-05). The run of
+ * 23:10 measured the fix that had just shipped and reported it as a loss: the returning device asked
+ * at 23:10:11, the responder waited its own 60 s for a digest, the returning device answered at
+ * 23:11:23 once its mailbox had drained twenty-five groups, and the bundle went out TWO SECONDS
+ * after this budget expired. A repair that takes 72 s is a number to record, not an absence to
+ * report - and a budget the same size as the protocol's own wait cannot tell them apart. It is still
+ * a BOUND rather than a schedule: `reachedInMs` says how long it really took, so a repair that slows
+ * down is visible as a number instead of hiding inside a bigger budget.
+ *
+ * RAISED AGAIN THE SAME EVENING, from 180 s, by a run that measured 189. The repair is no longer
+ * lossy and is now bounded by a GLOBAL mailbox drain: the responder answers a digest only once the
+ * asking device's WHOLE queue is idle, and a device rejoining twenty-nine groups takes minutes to
+ * get there. The row's claim is the final state, so the budget has to outlast the mechanism it is
+ * watching - and `reachedInMs` is what keeps the cost visible rather than absorbed. The latency
+ * itself is filed, with the per-group barrier that would remove it (backlog.md).
+ */
 
 const T0 = Date.now();
 const mark = (what) => ({ what, at: Date.now() - T0, wall: new Date().toISOString() });
@@ -882,12 +901,21 @@ async function messagesIn(cx, name, marker, target) {
     everyMs: 500,
   });
   const r = await settledCount(cx, marker, { timeoutMs: 15_000 });
+  // WHAT A ZERO MEANS, from the one probe that carries the discriminators. `countMessage` reads the
+  // open pane, so a zero has three readings - the pane is gone, the conversation is the wrong one,
+  // or the messages really are absent - and `SAMPLE` answers all three in one evaluation. Taken on
+  // every reading and not only on a miss, so the passing runs record what a good sample looks like.
+  const at = await sample(cx, marker).catch(() => null);
   const seen = {
     count: r.count,
     settled: r.settled,
     reachedInMs: reached.ok ? reached.elapsedMs : null,
     waitedForMs: reached.elapsedMs,
     why: null,
+    // `composer` false means the pane was not mounted and every count above reads 0 for that reason
+    // alone; `header` names the conversation the counts were taken from; `bodyCount` above zero with
+    // `count` at zero is the sidebar preview of a conversation nobody opened - fault #29.
+    pane: at && { composer: at.composer, header: at.header, paneChars: at.paneChars, bodyCount: at.bodyCount },
   };
   if (reached.ok) return seen;
 
@@ -1766,6 +1794,22 @@ const expectations = {
    * minutes apart.
    */
   theSameMESSAGESArrived: returnedSaw.count === freshSaw.count,
+  /**
+   * AND THE CONTROL ESTABLISHED THE BASELINE, without which the equality above is an agreement
+   * between two failures.
+   *
+   * The paragraph above says zero is a defensible answer for both devices, because forward secrecy
+   * blinds a device that joins at epoch N to epoch N-1. That is true of the CIPHERTEXT and false of
+   * the repair: both devices join by external commit, both therefore hold frames they can never
+   * read, and the history exchange exists to hand them over - which it did, at 2 ms, in every run
+   * that has ever passed this row. So a reference at zero is not forward secrecy, it is the repair
+   * not happening, and the run of 2026-09-05 23:10 proved the hole by returning `PASS-DIRTY` with
+   * BOTH devices short of all three messages and `theSameMESSAGESArrived` green.
+   *
+   * A row whose control failed cannot conclude about its subject, and saying so is the whole
+   * difference between a measurement and a green tick.
+   */
+  theREFERENCEGotWhatWasSaid: freshSaw.count === sentWhileAway,
   /**
    * AND BOTH READINGS ARE REAL. `null` is what `messagesIn` returns when it could not open the
    * conversation at all, and two nulls compare equal - which would be this file's most convincing

@@ -1886,6 +1886,38 @@ same string.
 records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
 its id.
 
+### P2 - the history repair is correct now and takes THREE MINUTES, because a digest waits for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
+
+**The loss is fixed and what is left is a duration.** HEAL-REVOKE-7 `--order last`, on the build
+carrying all three fixes:
+
+    23:47:34  W1 asks the returning device to describe its store for 31101692
+    23:50:43  the returning device answers - THREE MINUTES AND NINE SECONDS later
+    23:50:43  W1 sends the diff, 3 of 3, immediately
+
+Nothing is lost: the same run's reference device answered in **three seconds**, and the returning
+device does get its messages - after 189 s. The row's budget had to be raised twice in one evening,
+60 s to 180 s to 300 s, chasing a mechanism that works and is slow.
+
+**THE BARRIER IS GLOBAL WHERE THE QUESTION IS PER-GROUP.** `answerAfterMailboxDrained` waits on
+`waitForMessageQueueIdle`, which is idle only when the device has applied EVERYTHING - and a device
+that has just rejoined is applying twenty-nine external joins plus every frame queued behind them.
+The reason the barrier exists is sound and is written beside it: *"a digest computed while this
+device is still applying its own queue describes a store it is in the middle of completing"*. That
+is a claim about the frames of THE GROUP BEING DESCRIBED. Frames for twenty-eight other
+conversations cannot change this group's manifest, and waiting for them is a cost with no
+correctness behind it.
+
+**What the fix needs**: a barrier scoped to a group. `waitForMessageQueueIdle(reason, groupId)`
+already takes a group id, but it means *"the group whose catch-up session I am INSIDE"* - a
+different question, and passing this group there would claim a nesting that does not exist (the
+paragraph in `reconcileGroup` explains what that cost the last time). So this is a new capability on
+the queue, not a new argument: *are there frames pending for THIS group*.
+
+**Until then the cost is visible rather than hidden**: `reachedInMs` is recorded on every reading,
+and a repair that starts taking longer shows up as a number in the ledger instead of as a row that
+suddenly fails.
+
 ### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
 
 `login.mjs` drives the real login, so the observed TAB navigates to Authentik and back - and a
