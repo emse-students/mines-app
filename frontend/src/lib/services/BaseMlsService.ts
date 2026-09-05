@@ -905,10 +905,10 @@ export abstract class BaseMlsService implements IMlsService {
     // nothing has been FETCHED yet is not a bucket that has nothing left. What this skips is the
     // other twenty-eight conversations' frames, not the round trip that lists our own.
     await this.pendingPullInFlight?.catch(() => {});
-    if (this.messageScheduler.isGroupIdle(groupId)) return;
-    console.debug(
-      `[QUEUE] "${caller}" waits for ${groupId.slice(0, 8)}… to have nothing left to apply`
-    );
+    // SILENT. A leg waiting for its own group's frames is the routine path and finishes in
+    // milliseconds; a line announcing the wait, with nothing announcing its end, is half a story
+    // printed once per conversation per answer. What a reader needs is the OUTCOME, and
+    // `[HISTORY_REQ] ... diff with <them>` is it.
     await this.messageScheduler.waitUntilGroupIdle(groupId);
   }
 
