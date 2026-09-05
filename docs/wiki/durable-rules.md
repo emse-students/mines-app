@@ -285,6 +285,18 @@ The largest area here, and the one that has cost the most. `chat` = [chat](front
   first thing to ask of a missing notification is not why the decrypt failed but whether anything was
   ever sent. `cd`, `mob`
 
+- **A ROW'S VERDICT MEANS WHAT THAT ROW ASSERTED, AND "IT PASSES" IS NOT A MECHANISM.** The same
+  investigation cited LIFE-3 - *"which KILLS the app, passes, so a killed app's push must fire"* -
+  in a backlog entry, a code comment, a CHANGELOG entry and a pull request, and it was wrong in all
+  four. LIFE-3 **force-stops**, and `life.mjs` says what that means: a force-stopped package sits in
+  Android's STOPPED state and the framework cancels every FCM broadcast to it, so the row records
+  `notification: {expected: false}` and passes because nothing was owed. The claim itself was true
+  and the evidence for it was a DIFFERENT row - LIFE-8, `am kill`, a decrypted push in 4.7 s.
+  **Before a green row is used as evidence for a mechanism, read what it asserts**: a verdict is an
+  answer to one question, and the phase index is not that question. It was caught by re-running the
+  row for an unrelated regression check, which is the cheapest way it could have been found and was
+  luck rather than method.
+
 - **`document.visibilityState` AND `document.hasFocus()` ARE BOTH PERMANENTLY TRUE IN A BACKGROUNDED
   ANDROID TAURI WEBVIEW, so every "is the user looking at this" decision is wrong on a phone, in the
   direction that says yes.** Measured on device 2026-09-05 (Mi 9T, Android 16): backgrounded with

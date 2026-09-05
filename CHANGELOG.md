@@ -26,9 +26,9 @@ which is also where every release up to and including v0.13.1 now lives.
   "the background push handler posts its own". Nobody notified; the message sat in the app, unread
   and unannounced, until the user opened it. Measured on device with all three sources correlated on
   one message: `[SEND] PUBLISHED recipient=...:tauri-...` with no `[PUSH_DEFERRED]` after it, an
-  empty shade, and the app holding the message the whole time. It is also why the campaign's killed-
-  app row passed while the backgrounded one failed - **a killed app cannot acknowledge**, so its
-  push does fire. Native mobile now notifies on `visibilityState === 'hidden'`, deliberately not on
+  empty shade, and the app holding the message the whole time. It is also why the campaign's
+  `am kill` row passed while the backgrounded one failed - **a killed app cannot acknowledge**, so
+  its push does fire. Native mobile now notifies on `visibilityState === 'hidden'`, deliberately not on
   the desktop rule of "hidden or unfocused": a WebView reporting no focus while its activity is on
   screen would interrupt somebody reading the message. Five tests pin both directions.
 

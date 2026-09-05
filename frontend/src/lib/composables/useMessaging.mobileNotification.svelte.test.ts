@@ -11,7 +11,8 @@
  * Measured on device 2026-09-05 with all three sources correlated on one message: the server logged
  * `[SEND] PUBLISHED recipient=...:tauri-...` with NO `[PUSH_DEFERRED]` after it, the shade held
  * nothing, and the app was holding the message the whole time. It also explains the pair the
- * campaign had backwards - LIFE-3, which KILLS the app, passes, because a killed app cannot ACK.
+ * campaign had backwards - LIFE-8 (`am kill`) measured a decrypted push in 4.7 s, because a killed
+ * app cannot ACK so the push does fire.
  *
  * These pin the new condition from both directions, because the risk runs both ways: too quiet and
  * the defect is back, too loud and a banner interrupts somebody reading the message.

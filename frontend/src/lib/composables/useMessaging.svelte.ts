@@ -335,9 +335,12 @@ export function useMessaging() {
     // one message: `[SEND] PUBLISHED recipient=...:tauri-...` with NO `[PUSH_DEFERRED]` after it,
     // an empty shade, and the app holding the message the whole time.
     //
-    // That also explains the pair everyone had backwards: LIFE-3, which KILLS the app, passes -
-    // a killed app cannot ACK, so the push does fire and the handler notifies. The phone in a
-    // pocket was the failing case and the phone that was killed the passing one.
+    // That also explains the pair the campaign had backwards: LIFE-8 (`am kill` - the user killing
+    // it) measured a decrypted push in 4.7 s, because a killed app cannot ACK, so the push does fire
+    // and the handler notifies. The phone in a pocket was the failing case and the phone the user
+    // had killed the passing one. (NOT LIFE-3, which force-stops: a force-stopped package sits in
+    // Android's STOPPED state and the framework cancels every FCM broadcast to it, so that row
+    // expects no notification at all and says nothing about this.)
     //
     // AND THE MOBILE CONDITION IS NOT THE DOCUMENT'S, BECAUSE THE DOCUMENT LIES THERE. Measured on
     // device: a backgrounded Tauri app reports `visibilityState: "visible"`, `hidden: false` and

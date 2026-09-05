@@ -1508,11 +1508,21 @@ The premise holds only when there IS a push. For the ordinary backgrounded case 
 push handler never runs, and **nobody notifies at all**. The app has the message the whole time; the
 user is simply never told.
 
-**It also explains the pair this campaign had backwards.** LIFE-3, which KILLS the app, passes - a
-killed app cannot ACK, so the deferred push fires and the Kotlin handler notifies. *The phone in a
-pocket was the failing case and the phone that was killed the passing one*, which the earlier
-account noticed and attributed to a spent ratchet generation. The generation is spent, and it is not
-why.
+**It also explains the pair this campaign had backwards.** **LIFE-8** (`am kill` - the user killing
+the app) measured a decrypted push in 4.7 s: a killed app cannot ACK, so the deferred push fires and
+the Kotlin handler notifies. *The phone in a pocket was the failing case and the phone the user had
+killed the passing one*, which the earlier account noticed and attributed to a spent ratchet
+generation. The generation is spent, and it is not why.
+
+**AND THE ROW FIRST CITED HERE WAS THE WRONG ONE - twice, by two different readers.** The original
+entry said *"LIFE-3, which KILLS the app, passes: a killed app has spent no generation, so its push
+decrypts and notifies"*, and the first correction of this entry repeated it. LIFE-3 **force-stops**,
+and `life.mjs` says why that is a different question: a force-stopped package sits in Android's
+STOPPED state and the framework cancels every FCM broadcast to it, so the row records
+`notification: {expected: false, afterMs: null}` and PASSES because nothing was owed. It is evidence
+about nothing here. Re-run 2026-09-05 20:24 to check this fix for a regression - `PASS-DIRTY`,
+unchanged - and that run is what caught the citation. **A row's verdict means what the row asserted,
+and "it passes" is not a mechanism.**
 
 **FIXED 2026-09-05**: the early return is gone. Native mobile now notifies on
 `visibilityState === 'hidden'` - not on "hidden or unfocused", which is the desktop rule: a WebView
@@ -1563,8 +1573,13 @@ case for a backgrounded app - those two come apart on every message.
 
 **LIFE-2 is the same defect and it is worse there.** Backgrounded via HOME (not killed), the shade
 held nothing but the USB notice, `notification.afterMs: null`, and the message took 95 s to appear.
-LIFE-3, which KILLS the app, passes: a killed app has spent no generation, so its push decrypts and
-notifies. **A phone in a pocket is the failing case and a phone that was killed is the passing one.**
+~~LIFE-3, which KILLS the app, passes: a killed app has spent no generation, so its push decrypts and
+notifies.~~ **Both halves of that sentence are wrong** - LIFE-3 FORCE-STOPS, which cancels FCM
+outright, so it expects no notification and passes because nothing was owed; and the row that does
+measure the killed case is LIFE-8 (`am kill`, a decrypted push in 4.7 s), where the reason is the
+missing ACK rather than an unspent generation. **A phone in a pocket is the failing case and a phone
+the user has killed is the passing one** - that part held, for a different reason than the one given
+here.
 
 **Three rules this sits on.** *A race that heals cleanly is still a defect* - and this one does not
 heal: the preview is gone for good. *A fallback is a signal, never a path* - this one is taken 100%
