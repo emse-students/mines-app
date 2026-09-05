@@ -258,6 +258,63 @@ The largest area here, and the one that has cost the most. `chat` = [chat](front
 `hr` = [history-reconciliation](protocols/history-reconciliation.md),
 `cd` = [chat-delivery](services/chat-delivery.md), `mob` = [mobile](frontend/mobile.md).
 
+**Two mechanisms, one user-visible outcome, and nobody owning the gap**
+
+- **A PATH THAT STAYS QUIET BECAUSE ANOTHER PATH WILL SPEAK MUST NAME THE CONDITION UNDER WHICH THAT
+  OTHER PATH RUNS - and something must assert the two conditions cover everything.** `notifyInbound`
+  returned immediately on native mobile, with a comment that is a complete argument and a wrong
+  premise: *"the background push handler posts its own, so the user would get two"*. The push
+  handler runs only when the server sends a push, and the server pushes only a message the device
+  has NOT acknowledged after 10 s - so for a backgrounded app, which keeps its WebSocket, receives
+  the message and ACKs it, there is no push and the handler never runs. **Neither half spoke, and
+  the user was never told about a message sitting in their own app.** Measured on device 2026-09-05
+  by correlating all three sources on one message: `[SEND] PUBLISHED recipient=...:tauri-...` with no
+  `[PUSH_DEFERRED]` after it, an empty shade, and `A1 holds the message: 1`. The two conditions were
+  complementary in somebody's head and overlapping nowhere in the code. Where a partition like this
+  is load-bearing, the cheap version is a log line on each side saying which case it took; the honest
+  version is a test that drives both. [chat](frontend/modules/chat.md), `mob`
+
+- **A CAUSE IS NOT ESTABLISHED UNTIL THE THING THAT WOULD HAVE PRODUCED THE SYMPTOM IS SHOWN TO HAVE
+  RUN AT ALL.** The same defect was filed for a day against a `SecretReuseError` that logcat shows on
+  every message - loud, at `E/`, naming the right group and the right epoch, and belonging to a
+  SILENT frame travelling beside the message, which raises no notification whatever it decrypts to.
+  The evidence was never wrong; it was never connected. One field settled it, and it was in the line
+  the whole time: the push's `queuedMessageId` is the id of the frame it carries, and it was not the
+  message's. **A loud error next to a symptom is a coincidence until something ties them together** -
+  and the tie has to be an identifier, not a plausible story. Corollary, paid for twice here: the
+  first thing to ask of a missing notification is not why the decrypt failed but whether anything was
+  ever sent. `cd`, `mob`
+
+- **A ROW'S VERDICT MEANS WHAT THAT ROW ASSERTED, AND "IT PASSES" IS NOT A MECHANISM.** The same
+  investigation cited LIFE-3 - *"which KILLS the app, passes, so a killed app's push must fire"* -
+  in a backlog entry, a code comment, a CHANGELOG entry and a pull request, and it was wrong in all
+  four. LIFE-3 **force-stops**, and `life.mjs` says what that means: a force-stopped package sits in
+  Android's STOPPED state and the framework cancels every FCM broadcast to it, so the row records
+  `notification: {expected: false}` and passes because nothing was owed. The claim itself was true
+  and the evidence for it was a DIFFERENT row - LIFE-8, `am kill`, a decrypted push in 4.7 s.
+  **Before a green row is used as evidence for a mechanism, read what it asserts**: a verdict is an
+  answer to one question, and the phase index is not that question. It was caught by re-running the
+  row for an unrelated regression check, which is the cheapest way it could have been found and was
+  luck rather than method.
+
+- **`document.visibilityState` AND `document.hasFocus()` ARE BOTH PERMANENTLY TRUE IN A BACKGROUNDED
+  ANDROID TAURI WEBVIEW, so every "is the user looking at this" decision is wrong on a phone, in the
+  direction that says yes.** Measured on device 2026-09-05 (Mi 9T, Android 16): backgrounded with
+  HOME, the page reports `{visibilityState: "visible", hidden: false, hasFocus: true}` - byte for
+  byte its foreground answer - while its JS keeps running (a 1.5 s timer fired in 1507 ms). It is
+  NOT a missing lifecycle call: `WryActivity.onPause` already calls `mWebView.onPause()`, and
+  `WebView.onPause()` does not drive the Page Visibility API. **Two things depended on it and both
+  were wrong**: a backgrounded phone raised no notification for a message no push would ever carry
+  (see the rule above), and it sent a READ RECEIPT for a message nobody had seen - `MainChatPage`
+  gates the watermark on `isWindowFocused && isTabVisible`, and on Android both are constants.
+  `MainActivity.isInForeground` is the one honest statement of the fact in the process; the activity
+  pushes it into the page as `window.__canariForeground` plus a `canari:foreground` event, and
+  `isAppInForeground()` reads it - returning `true` wherever nothing states it, so web and desktop
+  keep deciding from their own working API. **The first fix for the notification was written against
+  the document and was INERT; only the device said so.** Any new visibility check on a path that
+  runs on mobile has to ask this instead, and the remaining call sites are a filed sweep.
+  [mobile](frontend/mobile.md), `frontend/src/lib/utils/appForeground.ts`
+
 **What the sender keeps, and what the queue will send**
 
 - **TWO FACTS THAT MUST BOTH BE TRUE ARE ONE WRITE.** The optimistic echo and the outbox entry that delivers it were persisted by two consecutive awaits, and a document torn down between them left a `pending` message on disk that no queue knew about - never sent, never retried, never reported, and visible to its author for ever. TAB-5 reloads 15 ms after the click and reproduces it. `saveMessageWithOutboxEntry` puts both rows in ONE IndexedDB transaction; both payloads are encrypted BEFORE it opens, because an `await` inside a transaction ends it and would restore the very gap being closed. [chat](frontend/modules/chat.md)

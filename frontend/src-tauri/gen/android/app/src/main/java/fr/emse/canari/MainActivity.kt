@@ -27,6 +27,13 @@ class MainActivity : TauriActivity() {
         @Volatile var isInForeground: Boolean = false
     }
 
+    /**
+     * The live WebView, for {@link pushForeground}. Null until `onWebViewCreate`, and deliberately
+     * not a `lateinit`: the lifecycle callbacks below run in configurations where it may not exist
+     * yet, and a crash there would be a worse outcome than a page that keeps its last value.
+     */
+    private var liveWebView: WebView? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         // The web layer reads system-bar insets via env(safe-area-inset-*) everywhere (status
@@ -120,6 +127,51 @@ class MainActivity : TauriActivity() {
         // Transparent background lets the Activity windowBackground show through while
         // SvelteKit hydrates, eliminating the ~1s black flash on startup.
         webView.setBackgroundColor(Color.TRANSPARENT)
+        // The web layer cannot see this activity's lifecycle any other way - see `pushForeground`.
+        // Held from here because it is the only hook that is handed the WebView at all.
+        liveWebView = webView
+        pushForeground(isInForeground)
+    }
+
+    /**
+     * Tells the page whether this activity is on screen, because NOTHING ELSE DOES.
+     *
+     * `document.visibilityState` is the obvious answer and it is WRONG here. Measured on device
+     * 2026-09-05, a Mi 9T on Android 16: a backgrounded app reports
+     * `{visibilityState: "visible", hidden: false, hasFocus: true}` - byte for byte what it reports
+     * in the foreground - while its JS keeps running (a 1.5 s timer fired in 1507 ms). `WryActivity`
+     * already calls `mWebView.onPause()` on the way out, so this is not a missing lifecycle call:
+     * `WebView.onPause()` simply does not drive the Page Visibility API.
+     *
+     * What that cost: a backgrounded phone was never told about a message it had already received.
+     * The app keeps its WebSocket, gets the message and ACKs it, so the server sends no push and the
+     * FCM handler never runs; the web layer would have raised the notification itself, but every
+     * check it could make said the user was looking at the app. **`isInForeground` is the one honest
+     * statement of that fact in the process** - `showNotification` already suppresses itself on it -
+     * and this hands the same statement to the layer that needs it.
+     *
+     * A GLOBAL AND AN EVENT, because they answer different questions. A listener that mounts after a
+     * transition would miss the event and know nothing, so `window.__canariForeground` always holds
+     * the current value for whoever asks later; the event is for whoever wants to react at the
+     * moment it changes. Both, or a page loaded while backgrounded starts life believing it is on
+     * screen.
+     *
+     * Best-effort by construction: `evaluateJavascript` needs the UI thread and a live WebView, and
+     * both lifecycle callbacks below are on it. If the WebView is not up yet, `onWebViewCreate`
+     * pushes the current value the moment it is.
+     */
+    private fun pushForeground(foreground: Boolean) {
+        val webView = liveWebView ?: return
+        val js = "window.__canariForeground=$foreground;" +
+            "window.dispatchEvent(new CustomEvent('canari:foreground',{detail:{foreground:$foreground}}));"
+        try {
+            webView.evaluateJavascript(js, null)
+        } catch (e: Exception) {
+            // A page that cannot be told is a page that keeps its last value, which is the safe one:
+            // it believes it is in the foreground and stays quiet. Logged because a silent failure
+            // here reads exactly like the defect this exists to fix.
+            Log.w("MainActivity", "pushForeground($foreground) failed: ${e.message}")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -136,6 +188,7 @@ class MainActivity : TauriActivity() {
         // Opening the app clears lingering message notifications (read here or on another
         // device) - the visible half of cross-device read-state sync.
         CanariFirebaseMessagingService.cancelAllMessageNotifications(this)
+        pushForeground(true)
         Log.d("MainActivity", "onResume: isInForeground=true, worker failure flag reset")
         // Migrates pending_push_secret.txt → Keystore on first foreground resume after
         // FCM registration (store_push_secret writes the file during the live session;
@@ -150,6 +203,7 @@ class MainActivity : TauriActivity() {
     override fun onPause() {
         super.onPause()
         isInForeground = false
+        pushForeground(false)
         Log.d("MainActivity", "onPause: isInForeground=false")
         CookieManager.getInstance().flush()
     }

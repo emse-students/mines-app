@@ -7,6 +7,7 @@
  * - File selection + validation
  */
 import { tick } from 'svelte';
+import { isAppInForeground } from '$lib/utils/appForeground';
 import { isMobileTauriRuntime } from '$lib/utils/appVersion';
 import { SvelteMap, SvelteDate } from 'svelte/reactivity';
 import { getToken } from '$lib/stores/auth';
@@ -321,19 +322,44 @@ export function useMessaging() {
     isOwn: boolean
   ): void {
     if (isOwn || isSystem) return;
-    // Native mobile (Android + iOS) posts its own OS notification from the background push handler,
-    // so the JS layer must NOT also fire one - the user would get two. Both platforms are covered
-    // by isMobileTauriRuntime().
-    if (isMobileTauriRuntime()) return;
     if (typeof document === 'undefined') return;
-    if (document.visibilityState === 'visible' && document.hasFocus()) return;
+
+    // NATIVE MOBILE USED TO RETURN HERE, AND THAT IS WHY A PHONE IN A POCKET NEVER NOTIFIED.
+    //
+    // The premise was "the background push handler posts its own, so the user would get two". It
+    // holds only when there IS a push, and for the ordinary backgrounded case there is none. The
+    // server pushes a message only when the device has not ACKNOWLEDGED it after 10 s
+    // (`scheduleDeferredPush`); a backgrounded Android app keeps its WebSocket, receives the frame
+    // and ACKs it - so no push is ever sent, the push handler never runs, and this early return
+    // meant nobody notified at all. Measured on device 2026-09-05, all three sources correlated on
+    // one message: `[SEND] PUBLISHED recipient=...:tauri-...` with NO `[PUSH_DEFERRED]` after it,
+    // an empty shade, and the app holding the message the whole time.
+    //
+    // That also explains the pair the campaign had backwards: LIFE-8 (`am kill` - the user killing
+    // it) measured a decrypted push in 4.7 s, because a killed app cannot ACK, so the push does fire
+    // and the handler notifies. The phone in a pocket was the failing case and the phone the user
+    // had killed the passing one. (NOT LIFE-3, which force-stops: a force-stopped package sits in
+    // Android's STOPPED state and the framework cancels every FCM broadcast to it, so that row
+    // expects no notification at all and says nothing about this.)
+    //
+    // AND THE MOBILE CONDITION IS NOT THE DOCUMENT'S, BECAUSE THE DOCUMENT LIES THERE. Measured on
+    // device: a backgrounded Tauri app reports `visibilityState: "visible"`, `hidden: false` and
+    // `hasFocus: true` - byte for byte its foreground answer - so BOTH halves of the check below
+    // would return early and this fix would have been inert. `isAppInForeground` reads the fact the
+    // Android activity states for itself; see `appForeground.ts` for the measurement.
+    const mobile = isMobileTauriRuntime();
+    if (mobile) {
+      if (isAppInForeground()) return;
+    } else if (document.visibilityState === 'visible' && document.hasFocus()) return;
     // THE DECISION LINE, and it fires only when a notification is actually expected - the tab is
     // not in front of the user. Everything downstream of here already speaks (`[NOTIF] Raised`,
     // `Throttled`, `permission is ...`), and everything upstream is the ordinary case of a visible
     // tab. Without it "no notification" and "never asked for one" are the same silence, which is
     // what left TAB-1 unattributable across three probes.
     console.log(
-      `[NOTIF] Inbound in ${conversationKey} while ${document.visibilityState} - asking.`
+      `[NOTIF] Inbound in ${conversationKey} while ` +
+        `${mobile ? 'the app is backgrounded (no push is sent for a frame this client ACKed)' : document.visibilityState}` +
+        ' - asking.'
     );
     const preview = getPreviewText(parseEnvelope(content));
     void ctx.sendSystemNotification(
