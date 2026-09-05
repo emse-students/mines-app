@@ -410,4 +410,88 @@ describe('MlsPerGroupScheduler', () => {
       expect(scheduler.isIdle()).toBe(true);
     });
   });
+  describe('the group-scoped barrier', () => {
+    /**
+     * ONE GROUP'S WORK FINISHES LONG BEFORE THE ACCOUNT'S, and that difference was three minutes.
+     *
+     * A device rejoining twenty-nine conversations reached whole-mailbox idle 189 s after a peer
+     * asked it to describe ONE of them, and answered that long after the question. Frames for the
+     * other twenty-eight cannot change that group's manifest, so the leg that describes it waits for
+     * its own group and nothing else.
+     */
+    it('resolves for a group whose frames are applied, while others are still queued', async () => {
+      const scheduler = new MlsPerGroupScheduler('web');
+      scheduler.enqueue(msg('group-a', 'a1'));
+      for (let i = 0; i < 20; i += 1) scheduler.enqueue(msg(`group-${i}`, 'x'));
+
+      let aIdleAfter: number | null = null;
+      let applied = 0;
+      const waiting = scheduler.waitUntilGroupIdle('group-a').then(() => {
+        aIdleAfter = applied;
+      });
+
+      await scheduler.drain(async () => {
+        applied += 1;
+      });
+      await waiting;
+
+      expect(aIdleAfter).not.toBeNull();
+      // It woke inside the drain, not at the end of it: `group-a` holds one frame of twenty-one.
+      expect(aIdleAfter as unknown as number).toBeLessThan(21);
+    });
+
+    it('does NOT resolve while the drain is applying a frame of that group', async () => {
+      // Out of its bucket and not yet applied is the one window a bucket-only check would miss.
+      const scheduler = new MlsPerGroupScheduler('web');
+      scheduler.enqueue(msg('group-a', 'a1'));
+
+      let resolved = false;
+      let sawInsideApply: boolean | null = null;
+      const waiting = scheduler.waitUntilGroupIdle('group-a').then(() => {
+        resolved = true;
+      });
+
+      await scheduler.drain(async () => {
+        sawInsideApply = resolved;
+        expect(scheduler.isGroupIdle('group-a')).toBe(false);
+      });
+      await waiting;
+
+      expect(sawInsideApply).toBe(false);
+      expect(resolved).toBe(true);
+    });
+
+    it('waits for the UNTAGGED bucket too, because nothing here can say whose it is', async () => {
+      const scheduler = new MlsPerGroupScheduler('web');
+      scheduler.enqueue({ ...msg('group-a', 'o'), groupId: undefined });
+
+      expect(scheduler.isGroupIdle('group-a')).toBe(false);
+
+      await scheduler.drain(async () => {});
+
+      expect(scheduler.isGroupIdle('group-a')).toBe(true);
+    });
+
+    it('resolves immediately for a group with nothing queued', async () => {
+      const scheduler = new MlsPerGroupScheduler('web');
+      scheduler.enqueue(msg('group-b', 'b1'));
+
+      expect(scheduler.isGroupIdle('group-a')).toBe(true);
+      await expect(scheduler.waitUntilGroupIdle('group-a')).resolves.toBeUndefined();
+    });
+
+    it('does not strand a group whose frame THREW - the key is cleared either way', async () => {
+      const scheduler = new MlsPerGroupScheduler('web');
+      scheduler.enqueue(msg('group-a', 'a1'));
+
+      // The drain propagates it, which is the point: the `finally` still has to run.
+      await expect(
+        scheduler.drain(async () => {
+          throw new Error('handler exploded');
+        })
+      ).rejects.toThrow('handler exploded');
+
+      expect(scheduler.isGroupIdle('group-a')).toBe(true);
+    });
+  });
 });

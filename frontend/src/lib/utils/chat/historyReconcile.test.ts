@@ -461,8 +461,11 @@ describe('the mailbox barrier', () => {
     // Returns void, synchronously: every responder leg runs inside the pipeline, so awaiting the
     // queue from there would be the drain waiting on itself.
     expect(
-      answerAfterMailboxDrained({ waitForMessageQueueIdle: gateway.wait } as never, answer)
+      answerAfterMailboxDrained({ waitForGroupQueueIdle: gateway.wait } as never, GROUP, answer)
     ).toBeUndefined();
+    // THE GROUP IT WAITS FOR, not the whole account: this leg describes ONE conversation, and a
+    // device rejoining twenty-nine of them reached whole-mailbox idle 189 s after it was asked.
+    expect(gateway.wait).toHaveBeenCalledWith('history answer', GROUP);
     await flush();
     expect(answer).not.toHaveBeenCalled();
 
@@ -474,7 +477,8 @@ describe('the mailbox barrier', () => {
   it('still answers when the barrier itself rejects - a broken queue must not silence a peer', async () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     answerAfterMailboxDrained(
-      { waitForMessageQueueIdle: vi.fn().mockRejectedValue(new Error('scheduler gone')) } as never,
+      { waitForGroupQueueIdle: vi.fn().mockRejectedValue(new Error('scheduler gone')) } as never,
+      GROUP,
       answer
     );
     await flush();

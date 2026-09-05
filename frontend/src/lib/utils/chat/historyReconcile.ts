@@ -386,16 +386,26 @@ function recentlyAsked(groupId: string, now: number): boolean {
  * on its next edge, and the alternative is holding the drain open on a peer's request.
  */
 export function answerAfterMailboxDrained(
-  mlsService: Pick<IMlsService, 'waitForMessageQueueIdle'>,
+  mlsService: Pick<IMlsService, 'waitForGroupQueueIdle'>,
+  /**
+   * The conversation being answered ABOUT, and every leg that reaches here knows it.
+   *
+   * It used to wait for the WHOLE mailbox. That is the right question for something whose answer
+   * depends on the whole store and the wrong one for every caller here, all of which describe or
+   * serve ONE group: measured 2026-09-05, a device rejoining twenty-nine conversations took 189 s
+   * to reach whole-mailbox idle and answered a digest about one of them that long after it was
+   * asked. Frames for the other twenty-eight cannot change that group's manifest.
+   */
+  groupId: string,
   // `Promise<unknown>` rather than `Promise<void>`: every caller hands over a chain already ending
   // in its own `.catch(log)`, whose value is whatever that leg happened to resolve to. Nothing here
   // reads it, and demanding `void` only forces a wrapper at each call site that discards it.
   answer: () => Promise<unknown>
 ): void {
   void (async () => {
-    // `null`: the point of this wrapper is that the leg runs OUTSIDE the drain that scheduled it,
-    // owning nothing - so anybody else's session closes without it and waiting always terminates.
-    await mlsService.waitForMessageQueueIdle('history answer', null).catch(() => {});
+    // The leg runs OUTSIDE the drain that scheduled it and owns no catch-up session, so this waits
+    // rather than deadlocking however long the group takes.
+    await mlsService.waitForGroupQueueIdle('history answer', groupId).catch(() => {});
     await answer();
   })();
 }
