@@ -194,8 +194,25 @@ if (!existsSync(LEDGER)) {
 // THE NEWEST VERDICT PER ROW. Newest rather than best: a row that passed yesterday and failed today
 // is failing, and a tool reporting the pass would be the reason nobody looked.
 const latest = new Map();
+// THE NEWEST VERDICT PER ORDER, for the rows that HAVE orders. A row whose claim is a COMPARISON -
+// HEAL-REVOKE-7 is "does the ORDER of the return change where the device ends up" - cannot be
+// answered by one run, and its two runs land in the ledger as two records under one id. Taking the
+// newest of them names whichever half ran last, so a pair whose halves DISAGREE reads as whatever
+// was measured most recently: the board said `FAIL` and the ledger said `PASS-DIRTY` about the same
+// row, on 2026-09-05, and both were right about their own half. Rows with a single order are
+// untouched by this - the map has one entry and the worst of one is itself.
+const perOrder = new Map();
 const divergent = new Map();
 const diagnostics = new Map();
+
+/** Worst first: a pair is only as good as its weakest half, and that is what the row claims. */
+const VERDICT_RANK = ['INVALID', 'FAIL', 'PARTIAL', 'VACUOUS', 'SKIPPED', 'PASS-DIRTY', 'PASS'];
+const worseOf = (a, b) => {
+  const ia = VERDICT_RANK.indexOf(a);
+  const ib = VERDICT_RANK.indexOf(b);
+  // An unknown verdict sorts worst, deliberately: a name this tool does not know is not a pass.
+  return (ia < 0 ? -1 : ia) <= (ib < 0 ? -1 : ib) ? a : b;
+};
 for (const line of readFileSync(LEDGER, 'utf8').split('\n')) {
   if (!line.trim()) continue;
   let r;
@@ -236,6 +253,44 @@ for (const line of readFileSync(LEDGER, 'utf8').split('\n')) {
         instrumentSha: r.instrumentSha,
       });
     }
+    if (r.order) {
+      if (!perOrder.has(row)) perOrder.set(row, new Map());
+      const byOrder = perOrder.get(row);
+      const seen = byOrder.get(r.order);
+      if (!seen || String(r.at) > String(seen.at)) {
+        byOrder.set(r.order, { verdict: r.verdict, at: r.at, build: r.build });
+      }
+    }
+  }
+}
+
+// THE PAIRS, ADJUDICATED. Only rows that actually ran under more than one order: everything else has
+// one half and is already its own answer.
+const pairs = [];
+for (const [row, byOrder] of perOrder) {
+  if (byOrder.size < 2) continue;
+  const halves = [...byOrder.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const verdict = halves.map(([, h]) => h.verdict).reduce(worseOf);
+  const held = latest.get(row);
+  pairs.push({ row, halves, verdict, was: held?.verdict });
+  if (held) held.verdict = verdict;
+}
+
+if (pairs.length) {
+  console.log(
+    '\n[rows] ' +
+      pairs.length +
+      ' row(s) are a COMPARISON and are adjudicated on ALL their halves, not the newest:'
+  );
+  for (const p of pairs) {
+    console.log(
+      '  ' +
+        p.row.padEnd(14) +
+        p.halves.map(([o, h]) => o + ': ' + h.verdict).join('  ') +
+        '  -> ' +
+        p.verdict +
+        (p.was && p.was !== p.verdict ? '  (newest alone said ' + p.was + ')' : '')
+    );
   }
 }
 

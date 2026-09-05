@@ -1694,14 +1694,14 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
-### P1 - a device that joins a group ends up permanently short of the messages sent just before it arrived, because the responder gives up seven seconds before the answer comes (measured on the local estate 2026-09-05, six reproductions)
+### P1 - a device that joins a group ends up permanently short of the messages sent just before it arrived: the responder gives up seven seconds before the answer comes, and the one retry that would have saved it is swallowed by a coalescing window (measured on the local estate 2026-09-05, eight reproductions and ONE CONTROL THAT PASSED)
 
 **HEAL-REVOKE-5 found it on the first run that ever sent a message.** The runner's own docstring had
 claimed for a week that the world it moves while the device is away is made of *"a group created, a
 group deleted, and messages sent"*; the code moved MEMBERSHIP only. Adding the message half took one
 run to fail.
 
-**THE MEASUREMENT, IDENTICAL IN FIVE RUNS.** W1 creates a group while the victim is revoked, says
+**THE MEASUREMENT, IDENTICAL IN SEVEN RUNS AND ON TWO DIFFERENT ROWS** - HEAL-REVOKE-5 six times and HEAL-REVOKE-8 once, the latter with every one of its own assertions green. W1 creates a group while the victim is revoked, says
 three marked things in it, and the victim then comes back:
 
 | | messages seen | time |
@@ -1769,13 +1769,45 @@ its own queue describes a store it is in the middle of completing"*. **A device 
 back is applying twenty external joins**, so its queue takes longer to drain than the responder is
 willing to wait. The reference wins because it happens to ask when its own queue is already quiet.
 
-**AND NOTHING RETRIES.** The ask is coalesced (`recentlyAsked` / `PROBE_COALESCE_MS` = 30 s) and the
-only thing that raises it again for a group is a NEW unreadable frame or a fresh connection edge.
-**A device that joined late holds no unreadable frame** - the messages predate its membership, so
-there is nothing for it to notice missing, and the reconciler's own trigger is
-`if (sawUnreadableFrame)`. **You cannot reconcile what you never saw.** So the conversation settles,
-shows READY, shows `amber: []`, and is simply short of three messages, for ever, with nothing
-anywhere saying so.
+**AND NOTHING RETRIES - BUT NOT FOR THE REASON FIRST WRITTEN HERE.** The first version of this
+entry said a late joiner holds no unreadable frame and so never raises the reconciler's other
+trigger. **That is false, and HEAL-REVOKE-7 measured it false.** The server hands a joining device
+the group's queued frames, it cannot read any of them, and it says so out loud six seconds after the
+join:
+
+    [22:11:09] [HISTORY_RECONCILE] asked fc1cb0bc... whether we hold the same history
+    [22:11:15] [HISTORY] fc1cb0bc... holds 4 frame(s) it can never read - reconciling
+    [22:12:09] [HISTORY_REQ] fc1cb0bc... asked <the returning device> to describe itself, no digest came
+
+**The trigger fires. The ask never leaves.** `reconcileGroup` returns at `if (recentlyAsked(groupId,
+now)) return false` - `PROBE_COALESCE_MS` is 30 s and the join's own ask was 6 s ago - and it returns
+there SILENTLY, after the caller has already printed the word *reconciling*. So the one line a reader
+would trust is the one that is not true.
+
+**THE COALESCING WINDOW IS SOUND ONLY UNDER AN ASSUMPTION THAT IS FALSE HERE**, and the code states
+the assumption itself: being wrong about it costs *"one repair deferred to the next edge, and the
+next connection re-asks unconditionally either way"*. The next connection edge is the next time this
+device reconnects - which for a session that simply stays up is never. The trigger's evidence is
+spent by then (the frame is acked and gone), so the deferral is permanent. The conversation settles,
+shows READY, shows `amber: []`, and is short three messages for ever, with nothing anywhere saying
+so.
+
+**THE ORDER PAIR IS THE CONTROLLED EXPERIMENT, AND IT ISOLATES THE VARIABLE TO ONE NUMBER.**
+HEAL-REVOKE-7 runs the same runner twice with one difference - whether anybody is online at the
+moment the device returns - and the two runs disagree on the final state, which is why the pair is a
+`FAIL`:
+
+| | first ask | the frame trigger | gap between them | second ask | messages |
+| --- | --- | --- | --- | --- | --- |
+| `--order last` (world online) | 22:11:09, at the join | 22:11:15 | **6 s - inside the 30 s window** | never | **0 of 3, for ever** |
+| `--order first` (world offline, lifted later) | 22:14:18, at the join, answered by nobody | 22:15:00 | **42 s - outside it** | 22:15:00, answered | **3 of 3 in 3.5 s** |
+
+**The run that had NOBODY to answer its first ask is the run that ends up complete.** Its first ask
+was wasted, so its retry fell outside the coalescing window; by the time the retry went out its own
+mailbox had drained, the digest went out in two seconds, `history_bundle` landed, and the device is
+whole. The run that had a responder available immediately is the one that loses the messages
+permanently. **The failure needs the two clocks AND the swallowed retry: fix either and this
+measurement passes.**
 
 **THIS IS ALSO WHAT HEAL-repair IS BLOCKED ON.** That row is `PARTIAL` - 7 of 14 reached the peer -
 and the open question written beside it is the string `no digest came`. It is the same line, from
@@ -1796,12 +1828,21 @@ complete.
 
 **WHAT THE FIX HAS TO SATISFY, and a deadline is not it** ([durable-rules](durable-rules.md):
 *termination comes from a proof, never from a clock*). Raising the 60 s buys the next slower boot
-nothing. The two shapes worth weighing: the responder could keep the solicitation open against
-DURABLE state rather than a timer, so a digest arriving late is still answered; or the asker could
-treat *"I have just joined a group and hold no history for it"* as a trigger in its own right, which
-is strictly better than an unreadable frame because it is available exactly when the gap is created
-and does not depend on anybody's queue. The second also closes the case where the responder never
-answered at all.
+nothing, and neither does shortening the coalescing window - both are the same mistake twice.
+
+**The responder's half is the one that can be made event-driven, and the shape is already in this
+file.** `history_pull` is answered on ARRIVAL, addressed, with no rendezvous and no TTL, and it
+terminates because a bundle asks for nothing. The second leg of the state exchange is the only one
+that needs a live waiter, and it needs it for nothing: the digest carries the manifest and the
+window, our own store carries the rest, so **a digest that arrives for a solicitation we issued is
+answerable whenever it arrives**. The 60 s then bounds MEMORY, which is what a TTL is for, instead
+of bounding CORRECTNESS, which is what it is doing now.
+
+**The asker's half is the retry, and it must not be a timer either.** A trigger that is coalesced is
+being told *an ask already in flight will cover you* - so the honest form is to REMEMBER it and let
+the in-flight ask's window close into a real second ask, rather than to drop it and hope a
+reconnection comes. And the silent `return false` has to say something: a line reading *reconciling*
+followed by nothing is worse than no line at all.
 
 **The instrument is in and the next measurement is a re-run, not an investigation.** The runner
 records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by

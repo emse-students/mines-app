@@ -231,11 +231,13 @@ noticing. Order = priority. Detail lives where the link says. Defect stories are
 rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
 [cross-client-testing](docs/wiki/cross-client-testing.md).
 
-1. **ELEVEN RUNGS COMPLETE, 145 OF 246 ROWS ANSWERED** - the board is
+1. **ELEVEN RUNGS COMPLETE, 147 OF 246 ROWS ANSWERED** - the board is
    [cross-client-testing](docs/wiki/cross-client-testing.md) and `bun rows.mjs` settles it against
-   the ledger. Not `PASS`: TAB-3b, HEAL-NEW-0, HEAL-repair, and eight rows the phone blocks. **PIN
-   is 6/11, all `PASS`** since 2026-09-05, written from nothing that day; the five that remain are
-   the ones that CHANGE a PIN or restart a browser, which is why they are last.
+   the ledger, and it now adjudicates a row that is a COMPARISON on ALL its halves rather than on
+   the newest. Not `PASS`: TAB-3b, HEAL-NEW-0, HEAL-repair, **HEAL-REVOKE-7 and -8**, and eight rows
+   the phone blocks. **PIN is 7/11, all `PASS`** since 2026-09-05, written from nothing that day;
+   the four that remain are the ones that CHANGE a PIN or restart a browser, which is why they are
+   last.
 2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
 3. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
