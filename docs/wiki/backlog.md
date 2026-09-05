@@ -2329,6 +2329,14 @@ client", never "clean on the server".
 
 ### P1 - a device asks for a Welcome for ever, and the member that answers RESETS the row that would have let it heal itself (measured on prod 2026-09-01)
 
+**SEEN AGAIN ON THE LOCAL ESTATE, 2026-09-06 01:03** - the first sighting outside production, and it
+is the only line of dirt on an otherwise clean HEAL-REVOKE-5: `[KICK] Stale leaf <the phone> removed
+from ba048e26…` on W1. That is the documented answer - a `welcome_request` for a group whose leaf is
+already in the tree is kicked and re-added - so the line is W1 behaving correctly and the phone
+asking for something it should not need. **The prod measurement this entry is waiting for now has a
+local reproduction to be taken against**, which is cheaper to instrument and does not need a
+production window.
+
 > **A FIFTH HALF WAS FOUND ON 2026-09-04 AND FIXED THE SAME DAY, AND IT IS THE ONE THAT MADE THE
 > OTHER FOUR UNREACHABLE FOR PART OF THE POPULATION.** Everything above negotiates what a `pending`
 > row MEANS; none of it runs for a device whose local WASM still holds the group, because
