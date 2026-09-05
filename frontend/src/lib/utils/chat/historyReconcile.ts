@@ -435,7 +435,18 @@ export async function reconcileGroup(
   // permanent behaviour for this kind of group, not a degradation of anything.
   if (mlsService.isDistributionGroup(groupId)) return false;
 
-  if (recentlyAsked(groupId, now)) return false;
+  if (recentlyAsked(groupId, now)) {
+    // SAID, because the caller has usually already announced a repair. `history.ts` prints
+    // "holds N frame(s) it can never read - reconciling" and then calls this, and a silent return
+    // here made that line a claim about something that did not happen - which is how the P1 of
+    // 2026-09-05 read as a product that never retries rather than as a trigger that was swallowed.
+    // One line per swallowed CALL, not per frame: the burst this window exists to collapse is
+    // already collapsed by the callers, which aggregate a replay into one trigger.
+    log(
+      `[HISTORY_RECONCILE] ${short}… was asked ${PROBE_COALESCE_MS / 1000}s ago at most - not asking again, that exchange is still the one that repairs this`
+    );
+    return false;
+  }
 
   if (!sendProbe) {
     // DEFERRED, NOT DROPPED. The caller that raised this trigger has usually just acked the frame

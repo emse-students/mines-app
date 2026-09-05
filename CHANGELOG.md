@@ -13,6 +13,22 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device that rejoined a busy account stayed three messages short of a conversation, for ever.**
+  The last leg of a history reconciliation asks the peer to describe its store and waits 60 s; the
+  peer answers only once its own inbound queue has drained, and a device that has just come back is
+  applying every group's external join at once. Measured on the local estate: **67 s to drain against
+  the 60 s wait**, the digest arriving seven seconds after the responder logged `no digest came`,
+  recorded by a rendezvous nobody was listening to any more, and dropped. The conversation then reads
+  READY, reports nothing amber, and is simply incomplete. Nothing retried it: the one trigger that
+  would have - `holds N frame(s) it can never read` - fired six seconds after the join and was
+  swallowed by the 30 s coalescing window, whose written justification is that *the next connection
+  re-asks unconditionally*, which is false for a session that stays up. **The order pair of
+  HEAL-REVOKE-7 is the control**: the same run with nobody online to answer the first ask ends up
+  COMPLETE, because its retry fell outside the window. Answering a digest needs nothing remembered -
+  it carries the manifest and the window, the store carries the rest - so it is now answered wherever
+  it lands, addressed by an outstanding solicitation so the election still elects one responder. The
+  60 s bounds memory instead of correctness, and the coalesced swallow is logged rather than silent.
+
 - **A phone in a pocket told the sender their message had been read.** The read watermark is raised
   when the window is focused and the tab visible - and in a backgrounded Android WebView BOTH are
   permanently true, so a phone sitting in a pocket with a conversation selected kept marking

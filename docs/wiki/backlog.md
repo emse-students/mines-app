@@ -1844,6 +1844,16 @@ the in-flight ask's window close into a real second ask, rather than to drop it 
 reconnection comes. And the silent `return false` has to say something: a line reading *reconciling*
 followed by nothing is worse than no line at all.
 
+**FIXED THE SAME DAY, AND THE ROW IT WAS FOUND ON IS WHAT VERIFIES IT.** Both halves shipped
+together: `answerHistoryDigest` is a function rather than a continuation inside the wait, and
+`systemMessageHandler` calls it when a digest arrives for a solicitation this device issued and no
+waiter took - addressed by `takeDigestSolicitation`, so the leg stays two-party and the election
+still elects exactly one responder. The 60 s now bounds MEMORY. The coalesced swallow is logged
+instead of silent, so `history.ts`'s *reconciling* line can no longer stand for something that did
+not happen. Nine tests, three files. **What is left is the measurement**: HEAL-REVOKE-7 `--order
+last` and HEAL-REVOKE-5 re-run on a build carrying it, and HEAL-repair, which was `PARTIAL` on the
+same string.
+
 **The instrument is in and the next measurement is a re-run, not an investigation.** The runner
 records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
 its id.

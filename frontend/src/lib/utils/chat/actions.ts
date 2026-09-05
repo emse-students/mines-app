@@ -6,13 +6,8 @@ import type { Conversation } from '$lib/types';
 import { isChannelConversationId } from '$lib/utils/chat/channelCrypto';
 import {
   sendFullHistoryBundle,
-  sendHistoryBundleForIds,
-  sendHistoryCoverage,
   sendHistoryDigestRequest,
-  sendHistoryPull,
   sendHistoryRangeBundle,
-  readHistoryEntries,
-  historyRangeStartFor,
   historyStateKeyFor,
   persistMlsStateAfterMutation,
   forgetMlsGroupIfPresent,
@@ -21,12 +16,14 @@ import {
   isGroupActiveOnServer,
   handleDuplicateLeafError,
 } from '$lib/utils/chat/groupActions';
-import { awaitProbe, digestIdentity, DIGEST_TTL_MS } from '$lib/utils/chat/historyDigestRendezvous';
 import {
-  diffHistoryDigest,
-  isEmptyHistoryDiff,
-  selectEntryIdsForPrefixes,
-} from '$lib/utils/chat/historyManifest';
+  awaitProbe,
+  digestIdentity,
+  DIGEST_TTL_MS,
+  noteDigestSolicited,
+  takeDigestSolicitation,
+} from '$lib/utils/chat/historyDigestRendezvous';
+import { answerHistoryDigest, stateOurCoverage } from '$lib/utils/chat/historyDiffAnswer';
 import { pendingGroupExitIds } from '$lib/utils/chat/pendingGroupExits';
 import { resolveDirectPeerId, retireConversation } from '$lib/utils/chat/conversations';
 import {
@@ -1185,23 +1182,13 @@ export async function handleHistoryRequest(params: {
   }
 
   /**
-   * States where OUR completeness begins, when the asker asked from below it - and says nothing
-   * otherwise.
+   * Our coverage, stated to this asker - the shared one bound to this exchange.
    *
-   * Called at every point this device actually ANSWERS, and at none of the points where it stays
-   * silent so another member takes over: silence means "ask somebody else", and a coverage line
-   * attached to it would tell the asker we answered when we did not. Awaited so it lands after
-   * whatever the answer was, which is what makes it read as the end of one.
+   * Awaited at every point this device ANSWERS and at none where it stays silent, which is what
+   * makes it read as the end of an answer rather than as one.
    */
-  const stateOurCoverage = async (since: number): Promise<void> => {
-    const coveredFrom = await historyRangeStartFor(groupId, storage);
-    if (coveredFrom <= since) return;
-    await sendHistoryCoverage(
-      groupId,
-      { from: selfIdentity, to: requesterIdentity, since, coveredFrom },
-      deps
-    );
-  };
+  const ourCoverage = (since: number): Promise<void> =>
+    stateOurCoverage({ groupId, selfIdentity, requesterIdentity, since, deps });
 
   if (probe.kind === 'range') {
     await sendHistoryRangeBundle(groupId, deps, {
@@ -1210,7 +1197,7 @@ export async function handleHistoryRequest(params: {
       limit: probe.limit,
       since: probe.since,
     }).catch((e) => log(`[HISTORY_RANGE] Answer failed for ${short}...: ${String(e)}`));
-    await stateOurCoverage(probe.since);
+    await ourCoverage(probe.since);
     return;
   }
 
@@ -1233,75 +1220,36 @@ export async function handleHistoryRequest(params: {
       // years below OUR window - the key is computed over what each store holds, so it agrees
       // happily. Stating our coverage here is what lets the asker go and ask a member with a longer
       // memory instead of reading a match as "I am complete".
-      await stateOurCoverage(probe.since);
+      await ourCoverage(probe.since);
       return;
     }
 
     // Same rule for the second leg, dated from OUR request rather than from the election: a digest
     // that predates the request cannot be an answer to it.
     const askedAt = Date.now();
+    // RECORDED BEFORE THE ASK GOES OUT, so a digest that overtakes this line still finds it. What it
+    // buys is that the wait below is no longer the only thing that can answer: a digest arriving
+    // after it ends is picked up by the system handler and answered there, because the answer needs
+    // nothing this scope holds. See `takeDigestSolicitation`.
+    noteDigestSolicited(groupId, requesterIdentity, askedAt);
     await sendHistoryDigestRequest(groupId, { from: selfIdentity, to: requesterIdentity }, deps);
     const answer = await awaitProbe(groupId, requesterIdentity, probeWaitMs, askedAt);
     if (answer?.kind !== 'digest') {
+      // NOT A LOST REPAIR ANY MORE, and the line says so: the solicitation outlives this wait. It
+      // used to end the exchange, and a device whose queue took 67 s to drain against this 60 s
+      // wait lost three messages for ever - measured 2026-09-05, HEAL-REVOKE-5 and -7.
       log(
-        `[HISTORY_REQ] ${short}... asked ${requesterIdentity} to describe itself, no digest came`
+        `[HISTORY_REQ] ${short}... asked ${requesterIdentity} to describe itself, no digest came within ${probeWaitMs}ms - the solicitation stays open`
       );
       return;
     }
+    // ANSWERED IN TIME, so the standing solicitation is spent here rather than left for the late
+    // road to find: one ask is answered once, and a second digest from this device is a new
+    // exchange needing a new ask.
+    takeDigestSolicitation(groupId, requesterIdentity);
     probe = answer;
   }
 
   const { digest, since } = probe;
-  const entries = await readHistoryEntries(groupId, deps);
-  if (entries === null) {
-    log(`[HISTORY_REQ] ${short}... store unreadable - staying silent so another member answers`);
-    return;
-  }
-
-  const diff = await diffHistoryDigest(entries, digest);
-  const idsToSend =
-    digest.mode === 'ids'
-      ? diff.missingOnPeer
-      : selectEntryIdsForPrefixes(entries, diff.pushPrefixes, digest.depth);
-
-  // The diff is computed over our WHOLE store and clipped only on the way out, which is what keeps
-  // the two sides symmetric: a stored timestamp can differ by a hair between devices (see
-  // `historyManifest`), so clipping the COMPARISON would let a message near the boundary read as
-  // missing on one side and present on the other, for ever. Clipping the ANSWER cannot: the worst it
-  // does is decline to send something the asker did not ask for.
-  await sendHistoryBundleForIds(groupId, idsToSend, deps, {
-    to: requesterIdentity,
-    since,
-  }).catch((e) => log(`[HISTORY_BUNDLE] Diff send error to ${requesterUserId}: ${String(e)}`));
-
-  const idsToPull = digest.mode === 'ids' ? diff.missingLocally : [];
-  if (idsToPull.length > 0 || diff.pullPrefixes.length > 0) {
-    // The requester listed messages we do not have, so we ask for them on the same exchange. Nothing
-    // is recorded if the answer never comes: our own next connection compares again, which is
-    // strictly better evidence than a note we wrote about a moment that has passed.
-    await sendHistoryPull(
-      groupId,
-      {
-        from: selfIdentity,
-        to: requesterIdentity,
-        ids: idsToPull,
-        prefixes: diff.pullPrefixes,
-        depth: digest.mode === 'range' ? digest.depth : undefined,
-        // OUR window, not the requester's. On this leg we are the asker, and the `since` that
-        // arrived with its digest describes what IT wants - reusing it would cap this device at the
-        // shortest window in the conversation.
-        since: await historyRangeStartFor(groupId, storage),
-      },
-      deps
-    ).catch((e) => log(`[HISTORY_PULL] Pull send error to ${requesterUserId}: ${String(e)}`));
-  }
-
-  log(
-    `[HISTORY_REQ] ${short}... diff with ${requesterIdentity}: ${idsToSend.length} to send, ${idsToPull.length + diff.pullPrefixes.length} to pull${isEmptyHistoryDiff(diff) ? ' (identical stores)' : ''}`
-  );
-
-  // Last, after everything this device had to give. The diff above names what we hold and it does
-  // not, which says nothing about the range below OUR window - a device that pruned to ninety days
-  // has an honest, complete answer for the last ninety days and none at all before that.
-  await stateOurCoverage(since);
+  await answerHistoryDigest({ groupId, requesterIdentity, selfIdentity, digest, since, deps });
 }

@@ -83,13 +83,17 @@ function purgeExpired(now: number): void {
  *
  * The waiter is resolved and dropped rather than left to poll: the request half is on a deadline,
  * and a probe that lands one millisecond inside it must be used, not missed.
+ *
+ * **Returns whether a live waiter took it**, which is the caller's only way to tell a probe that
+ * answered a wait from one that arrived after the wait ended. The second is not a lost cause - see
+ * `takeDigestSolicitation` - but it is a different road, and nothing else here distinguishes them.
  */
 export function noteProbeReceived(
   groupId: string,
   fromIdentity: string,
   probe: SolicitedProbe,
   now: number = Date.now()
-): void {
+): boolean {
   const k = key(groupId, fromIdentity);
   purgeExpired(now);
 
@@ -97,9 +101,10 @@ export function noteProbeReceived(
   if (pending && pending.length > 0) {
     waiters.delete(k);
     for (const resolve of pending) resolve(probe);
-    return;
+    return true;
   }
   probes.set(k, { probe, at: now });
+  return false;
 }
 
 /**
@@ -181,15 +186,73 @@ export function awaitProbe(
   });
 }
 
+/**
+ * How long a solicitation WE issued stays answerable, and it bounds MEMORY rather than correctness.
+ *
+ * The distinction is the whole point of this map. `DIGEST_TTL_MS` bounds how old a PROBE may be
+ * when it is used, because a probe describes a store at a moment and the store moves. Nothing about
+ * an answer decays that way: the digest that arrives carries its own manifest and its own window,
+ * and our store answers it as it stands when it is read. So a digest arriving late is a complete
+ * question, and the only reason to forget we asked is that this map cannot grow for ever.
+ *
+ * **It was measured at ten minutes of slack against a sixty-second wait.** On 2026-09-05 a device
+ * that had just rejoined an account with twenty groups took 67 s to drain its queue and answered
+ * seven seconds after `handleHistoryRequest` gave up; the digest was recorded, nobody was waiting
+ * for it, and three messages were lost permanently. A device draining a queue is slow in
+ * proportion to what it has to apply, which is why the slack is an order of magnitude and not a
+ * margin.
+ */
+const SOLICITATION_TTL_MS = 10 * 60_000;
+
+/** Groups we asked a device to describe itself for, and when we asked. */
+const solicited = new Map<string, number>();
+
+/**
+ * Records that we asked `identity` to describe its store for this group.
+ *
+ * Idempotent by construction: a second ask replaces the first, because it is the same question and
+ * the newer instant is the one a late digest should be measured against.
+ */
+export function noteDigestSolicited(
+  groupId: string,
+  identity: string,
+  now: number = Date.now()
+): void {
+  for (const [k, at] of solicited) if (now - at >= SOLICITATION_TTL_MS) solicited.delete(k);
+  solicited.set(key(groupId, identity), now);
+}
+
+/**
+ * Consumes the solicitation for this group and device, answering whether one was outstanding.
+ *
+ * CONSUMED, not read: one ask is answered once. A second digest from the same device for the same
+ * group is a new exchange and needs a new ask, which is what keeps an unsolicited digest - the same
+ * frame reaching every member of the group, since this leg is a broadcast - from making every one of
+ * them answer at once. The election exists to pick a single responder and this preserves it.
+ */
+export function takeDigestSolicitation(
+  groupId: string,
+  identity: string,
+  now: number = Date.now()
+): boolean {
+  const k = key(groupId, identity);
+  const at = solicited.get(k);
+  if (at === undefined) return false;
+  solicited.delete(k);
+  return now - at < SOLICITATION_TTL_MS;
+}
+
 /** Forgets everything held for a group (leaving it, or logging out). */
 export function forgetGroupDigests(groupId: string): void {
   const prefix = `${groupId}|`;
   for (const k of probes.keys()) if (k.startsWith(prefix)) probes.delete(k);
   for (const k of waiters.keys()) if (k.startsWith(prefix)) waiters.delete(k);
+  for (const k of solicited.keys()) if (k.startsWith(prefix)) solicited.delete(k);
 }
 
 /** @internal Resets module state between Vitest cases. */
 export function resetHistoryDigestRendezvousForTests(): void {
   probes.clear();
   waiters.clear();
+  solicited.clear();
 }

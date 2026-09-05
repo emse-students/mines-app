@@ -210,6 +210,21 @@ describe('reconcileGroup', () => {
       expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(1);
     });
 
+    it('SAYS it coalesced - a silent decline made the caller a liar', async () => {
+      // `history.ts` prints "holds N frame(s) it can never read - reconciling" and then calls this.
+      // When the swallow was silent, that line claimed a repair that never happened - which is how
+      // the P1 of 2026-09-05 read as a product that never retries rather than as a trigger swallowed
+      // six seconds after the join it duplicated.
+      const mls = service();
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+      log.mockClear();
+
+      expect(await reconcileGroup(mls, GROUP, log, now + 1)).toBe(false);
+
+      expect(log.mock.calls.flat().join(' ')).toContain('not asking again');
+    });
+
     it('coalesces PER GROUP - a burst on one says nothing about another', async () => {
       const mls = service();
       const now = Date.now();
