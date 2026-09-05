@@ -65,6 +65,24 @@ const PROBE_COALESCE_MS = 30_000;
 const asked = new Map<string, number>();
 
 /**
+ * The member the server elected for the ask currently in flight, per group.
+ *
+ * **The election is RANDOM, and deliberately so**: a backgrounded Android holds its WebSocket open,
+ * so `user:online` is true while the app cannot process the frame, and the delivery service
+ * randomises the responder precisely *"so those retries rotate past a frozen peer to a genuinely
+ * reachable one"*. It says `retries` because it assumes there are some. **There were none**, and
+ * this map is what lets there be: it names the member an ask reached, so a trigger raised while that
+ * ask is still in flight can go somewhere else instead of being swallowed as a duplicate.
+ */
+const electedFor = new Map<string, string>();
+
+/**
+ * Members already solicited on the current escalation walk for a group, never re-elected while it
+ * runs. A fresh, non-escalating ask starts a new walk and clears it.
+ */
+const chased = new Map<string, Set<string>>();
+
+/**
  * Why a reconciliation could not even be ATTEMPTED - which is also the name of the edge that would
  * let it be attempted.
  *
@@ -435,6 +453,12 @@ export async function reconcileGroup(
   // permanent behaviour for this kind of group, not a degradation of anything.
   if (mlsService.isDistributionGroup(groupId)) return false;
 
+  // A FRESH ASK STARTS A FRESH WALK. `exclude` is empty for every ordinary trigger, so this is the
+  // seam where "the previous chase is over" is known without a clock: whatever it excluded belonged
+  // to an ask that is no longer in flight, and carrying it forward would skip members that may have
+  // woken up since.
+  if (exclude.length === 0) chased.delete(groupId);
+
   if (recentlyAsked(groupId, now)) {
     // SAID, because the caller has usually already announced a repair. `history.ts` prints
     // "holds N frame(s) it can never read - reconciling" and then calls this, and a silent return
@@ -563,8 +587,93 @@ export async function reconcileGroup(
   // it used to sit - discharged the deferral on the strength of a round trip that asks nobody
   // anything, so a group whose probe then failed to encrypt was recorded as attended to.
   deferred.delete(groupId);
+  // WHO IT REACHED, recorded only now - on the one path where a probe really left this device. An
+  // election that ended in `no_peer_online`, a refused exclusion or a probe that failed to encrypt
+  // has nobody waiting on it, and naming a member there would make the next escalation skip a device
+  // that was never asked anything.
+  if (outcome?.target) electedFor.set(groupId, outcome.target);
   log(`[HISTORY_RECONCILE] asked ${short}… whether we hold the same history`);
   return true;
+}
+
+/**
+ * A trigger raised while an ask is STILL IN FLIGHT, by a device that can prove it is incomplete.
+ *
+ * **THE FIFTH TRIGGER, AND THE ONLY ONE THAT ARGUES WITH AN ASK RATHER THAN WITH A STORE.** The
+ * coalescing window exists to collapse a burst of identical triggers into one ask, and its written
+ * cost is *"one repair deferred to the next edge, and the next connection re-asks unconditionally
+ * either way"*. Measured false on 2026-09-05: a session that stays up has no next connection, and
+ * the trigger's evidence - a frame this device holds and cannot read - is acked and gone by then.
+ *
+ * **What the server does with an election is why this matters.** It picks a RANDOM online member,
+ * because a backgrounded Android holds its socket open while the app cannot process the frame, and
+ * randomising *"lets those retries rotate past a frozen peer to a genuinely reachable one"*. The
+ * measurement of that same day, with the server's own log beside the clients':
+ *
+ *     22:41:50  FORWARDED target=<the phone>   requester=<the returning device>   - silence
+ *     22:41:56  the returning device holds 4 frames it cannot read - swallowed, 6 s into 30
+ *     22:43:15  FORWARDED target=<the phone>   requester=<a reference device>     - silence
+ *     22:43:20  FORWARDED target=<W1>          requester=<a reference device>     - 3 of 3 sent
+ *
+ * The reference device is whole because it asked twice. The returning device asked once and stayed
+ * three messages short for ever. Nothing was slow and nothing was broken on the wire: the rotation
+ * the server is built around had no second draw to make.
+ *
+ * **WHY IT TERMINATES, and it is the coverage walk's proof rather than a new one.** Each escalation
+ * adds exactly ONE member to the excluded set and asks again; the set only grows; the server
+ * answers `no_peer_online` with a positive `excludedOnline` when every reachable member is in it,
+ * which the existing branch reports as the end. So a burst of forty unreadable frames on a group
+ * with two online members produces two elections and then a fact - not forty, and not a loop.
+ *
+ * **It is gated on EVIDENCE, never on suspicion.** Only a caller holding a frame it cannot read may
+ * escalate: that device knows its store is incomplete for this group without asking anybody, so
+ * silence from a responder has told it nothing. Every other trigger keeps the plain coalescing
+ * behaviour, because for them silence genuinely means "we agree".
+ */
+export async function escalateReconciliation(
+  mlsService: Pick<
+    IMlsService,
+    'sendHistoryRequest' | 'waitForMessageQueueIdle' | 'isDistributionGroup'
+  >,
+  groupId: string,
+  log: (msg: string) => void,
+  now: number = Date.now()
+): Promise<boolean> {
+  const short = groupId.slice(0, 8);
+
+  // NOT AN ESCALATION AT ALL - no ask is in flight, so this is the ordinary first ask and takes the
+  // ordinary road, chase state cleared with it.
+  if (!recentlyAsked(groupId, now)) return reconcileGroup(mlsService, groupId, log, now);
+
+  const elected = electedFor.get(groupId);
+  if (!elected) {
+    // An ask is in flight but no member has been elected for it yet - the round trip is still open.
+    // Escalating past nobody would only duplicate it, which is exactly what the window is for.
+    log(`[HISTORY_RECONCILE] ${short}… has an ask in flight with no responder named yet - waiting`);
+    return false;
+  }
+
+  const walked = chased.get(groupId) ?? new Set<string>();
+  if (walked.has(elected)) {
+    // Already escalated past this one. The walk advances only when the ask it is arguing with
+    // reached somebody new; otherwise it would re-draw a member it has already excluded, which is
+    // the shape that does not terminate.
+    log(
+      `[HISTORY_RECONCILE] ${short}… already asked somebody other than ${elected} - nothing to add`
+    );
+    return false;
+  }
+
+  walked.add(elected);
+  chased.set(groupId, walked);
+  // THE ASK THIS ARGUES WITH IS THE ONE BEING REPLACED, so its window must not suppress the
+  // replacement. Same move, and the same reason, as every other path that produced no repair.
+  asked.delete(groupId);
+  electedFor.delete(groupId);
+  log(
+    `[HISTORY_RECONCILE] ${short}… still holds frames it cannot read while ${elected} answers nothing - electing somebody else`
+  );
+  return reconcileGroup(mlsService, groupId, log, now, [...walked]);
 }
 
 /** Whether `member` is in `exclude`, comparing the two spellings one identity has. */
@@ -768,6 +877,8 @@ export function forgetGroupReconciliation(groupId: string): void {
   asked.delete(groupId);
   deferred.delete(groupId);
   coverageStated.delete(groupId);
+  electedFor.delete(groupId);
+  chased.delete(groupId);
 }
 
 /** Drops everything (session teardown, logout, test cleanup). */
@@ -775,4 +886,6 @@ export function resetHistoryReconciliation(): void {
   asked.clear();
   deferred.clear();
   coverageStated.clear();
+  electedFor.clear();
+  chased.clear();
 }

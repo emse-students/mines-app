@@ -13,6 +13,23 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A returning device asked one member for its missing history, that member was a frozen phone, and
+  nothing ever asked anybody else.** The delivery service elects a RANDOM online member to answer a
+  history solicitation, and says why in its own comment: a backgrounded Android holds its WebSocket
+  open, so `user:online` is true while the app cannot process the frame, and randomising *"lets those
+  retries rotate past a frozen peer to a genuinely reachable one"*. **There were no retries.**
+  Measured with the server log beside both clients: the returning device was forwarded to the phone
+  and heard nothing; six seconds later it noticed it held four frames it could not read, and that
+  trigger was swallowed by the 30 s coalescing window; a reference device minted ninety seconds later
+  was ALSO forwarded to the phone, heard nothing, asked a second time, drew W1, and had all three
+  messages one second later. The reference is whole because it asked twice. A trigger that carries
+  proof of incompleteness - a frame this device holds and cannot read - now ESCALATES instead of
+  deferring: it excludes the member the in-flight ask reached and elects another. It terminates on
+  the proof the server already delivers (`no_peer_online` with a positive `excludedOnline`, meaning
+  every reachable member has been asked), adds exactly one member per step, and is bounded by
+  membership rather than by a clock - a burst of forty unreadable frames on a group with two online
+  members costs two elections and then a fact.
+
 - **A device that rejoined a busy account stayed three messages short of a conversation, for ever.**
   The last leg of a history reconciliation asks the peer to describe its store and waits 60 s; the
   peer answers only once its own inbound queue has drained, and a device that has just come back is

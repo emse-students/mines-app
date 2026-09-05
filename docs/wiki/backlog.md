@@ -1844,6 +1844,34 @@ the in-flight ask's window close into a real second ask, rather than to drop it 
 reconnection comes. And the silent `return false` has to say something: a line reading *reconciling*
 followed by nothing is worse than no line at all.
 
+**AND THE RE-RUN FOUND A SECOND CAUSE WITH THE SAME SYMPTOM, WHICH IS WHY THE FIRST FIX DID NOT
+CLOSE THE ROW.** On the build carrying it, HEAL-REVOKE-7 `--order last` failed identically - and the
+SERVER's log named the difference:
+
+    22:41:50  FORWARDED target=<the phone>  requester=<the returning device>   - silence
+    22:41:56  the returning device holds 4 frames it cannot read - swallowed, 6 s into 30
+    22:43:15  FORWARDED target=<the phone>  requester=<a reference device>     - silence
+    22:43:20  FORWARDED target=<W1>         requester=<a reference device>     - 3 of 3 sent
+
+**The election is RANDOM by design**, and `notifyHistoryRequest` says why: a backgrounded Android
+holds its socket open, so `user:online` is true while the app cannot process the frame, and
+randomising *"lets those retries rotate past a frozen peer to a genuinely reachable one"*. **There
+were no retries.** The reference device is whole because it asked twice - a fresh enrolment joins
+each group, which clears the coalescing note - while the returning device re-joined a group it
+already held (`already in WASM - skip`), kept the note, and asked once. Two defects, one symptom:
+the responder that answers TOO LATE, and the responder that answers NOTHING.
+
+**Both are fixed.** The second by `escalateReconciliation`: a trigger that can prove incompleteness -
+a frame this device holds and cannot read - excludes the member the in-flight ask reached and elects
+another, terminating on the server's own `no_peer_online` + `excludedOnline` proof, one member per
+step, bounded by membership.
+
+**WHAT REMAINS OPEN IS THE REASON THE ESCALATION HAS TO BE GATED ON EVIDENCE: silence means both
+*we agree* and *nobody answered*.** They are the same observation, so a device with no local proof of
+a gap cannot tell a healthy responder from a frozen one. Making the agreeing responder ack would cost
+one frame per group per ask, which is the whole saving the state key exists for - so it is a design
+question rather than an oversight, and it is written here rather than improvised.
+
 **FIXED THE SAME DAY, AND THE ROW IT WAS FOUND ON IS WHAT VERIFIES IT.** Both halves shipped
 together: `answerHistoryDigest` is a function rather than a continuation inside the wait, and
 `systemMessageHandler` calls it when a digest arrives for a solicitation this device issued and no
