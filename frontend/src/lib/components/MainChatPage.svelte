@@ -15,6 +15,7 @@
   import { m } from '$lib/paraglide/messages';
   import { showToast } from '$lib/stores/toast.svelte';
   import { sendReadWatermark } from '$lib/utils/chat/messaging';
+  import { isAppInForeground } from '$lib/utils/appForeground';
   import {
     mergeReadWatermark,
     watermarkAfterReading,
@@ -441,7 +442,14 @@
 
   $effect(() => {
     if (!convs.selectedContact || !session.isLoggedIn) return;
-    if (!isWindowFocused || !isTabVisible) return;
+    // THE THIRD TERM IS THE ONLY ONE A PHONE ANSWERS HONESTLY. `hasFocus()` and `visibilityState`
+    // are both permanently true in a backgrounded Tauri WebView (measured on device 2026-09-05:
+    // a backgrounded app reports `visible` / `hasFocus: true`, byte for byte its foreground
+    // answer), so on Android these two said "the user is reading this" about a phone in a pocket -
+    // and the sender was told their message had been read. `isAppInForeground` reads the fact the
+    // Android activity states for itself, and is `true` everywhere that has a working visibility
+    // API, so the two terms above keep deciding web and desktop exactly as before.
+    if (!isWindowFocused || !isTabVisible || !isAppInForeground()) return;
     // Channels are server-authoritative and have no MLS group: their read state must never
     // go through the MLS outbox (sendReadWatermark -> enqueueControlEvent), otherwise the flusher
     // loops forever on resolveTerminalGroup/welcome-request 500s for a channel_ conversation id.

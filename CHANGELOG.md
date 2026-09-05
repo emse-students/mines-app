@@ -13,6 +13,39 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A phone in a pocket told the sender their message had been read.** The read watermark is raised
+  when the window is focused and the tab visible - and in a backgrounded Android WebView BOTH are
+  permanently true, so a phone sitting in a pocket with a conversation selected kept marking
+  messages read and telling the sender so. Same root cause as the notification below, same fix: the
+  gate now also asks the Android activity whether it is actually on screen.
+
+- **A phone in a pocket was never told about a message it had already received.** The app keeps its
+  WebSocket while backgrounded, so it receives the message and ACKNOWLEDGES it - and the server
+  pushes only what a device has NOT acknowledged after 10 seconds. So no push was sent, the
+  background push handler never ran, and the client refused to raise a notification itself because
+  "the background push handler posts its own". Nobody notified; the message sat in the app, unread
+  and unannounced, until the user opened it. Measured on device with all three sources correlated on
+  one message: `[SEND] PUBLISHED recipient=...:tauri-...` with no `[PUSH_DEFERRED]` after it, an
+  empty shade, and the app holding the message the whole time. It is also why the campaign's killed-
+  app row passed while the backgrounded one failed - **a killed app cannot acknowledge**, so its
+  push does fire. Native mobile now notifies on `visibilityState === 'hidden'`, deliberately not on
+  the desktop rule of "hidden or unfocused": a WebView reporting no focus while its activity is on
+  screen would interrupt somebody reading the message. Five tests pin both directions.
+
+  The `SecretReuseError` this was blamed on for a day is real and is not the cause: it belongs to a
+  SILENT mutation frame travelling beside the message, which raises no notification whatever it
+  decrypts to.
+
+  **And the first fix for it was inert, which only the device could say.** It asked the document
+  whether the app was on screen - and a backgrounded Tauri WebView reports
+  `{visibilityState: "visible", hidden: false, hasFocus: true}`, byte for byte its foreground
+  answer, while its JS keeps running. `WryActivity.onPause` already calls `mWebView.onPause()`, so
+  it is not a missing lifecycle call: the Page Visibility API does not follow it. The Android
+  activity now pushes `MainActivity.isInForeground` into the page, and `isAppInForeground()` reads
+  it - `true` wherever nothing states it, so web and desktop are untouched. Verified on hardware:
+  the shade carries the decrypted message 2 218 ms after it is sent, and the campaign row that
+  failed on it passes clean.
+
 - **The campaign's own "browser closed and reopened" gesture destroyed what it was measuring, and
   accused the product twice.** PIN-9 asks whether "stay signed in" really lets a device open its
   messages without a server round trip, and it force-killed the browser to ask - but Chrome commits

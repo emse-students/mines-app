@@ -22,8 +22,9 @@ vi.mock('$lib/stores/globalChatSingleton.svelte', () => ({
   globalChannels: {},
   globalNotifs: {},
 }));
-// Native mobile posts its own notification from the push handler, so the JS layer must stay quiet
-// there. Every case here is the WEB client, which is the only one that raises this itself.
+// Every case here is the WEB client, whose rule is "hidden OR unfocused". Native mobile has its own
+// condition and its own file (`useMessaging.mobileNotification`): it notifies only on `hidden`,
+// because a WebView reporting no focus while its activity is on screen would interrupt a reader.
 vi.mock('$lib/utils/appVersion', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   isMobileTauriRuntime: () => false,
@@ -50,7 +51,14 @@ function makeContext() {
     authToken: 'token',
     // Not the open conversation: a hidden tab showing this very thread is a different question.
     selectedContact: 'something-else',
-    storage: { saveMessage: vi.fn().mockResolvedValue(undefined) } as never,
+    // BOTH writers, because the two inbound paths use different ones: the live path saves one
+    // message and the bulk flush saves the batch. A fixture with only the first made
+    // `batchAddMessages` log a real TypeError into every drain case - harmless to the assertion,
+    // and exactly the kind of red herring a later reader spends an hour on.
+    storage: {
+      saveMessage: vi.fn().mockResolvedValue(undefined),
+      saveMessages: vi.fn().mockResolvedValue(undefined),
+    } as never,
     setAuthToken: vi.fn(),
     getSendError: () => '',
     setSendError: vi.fn(),

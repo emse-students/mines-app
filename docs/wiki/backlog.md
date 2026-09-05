@@ -62,7 +62,7 @@ else holds, a console owned by the user, or hardware that does not exist.
 
 | What | Kind | Where the substance is |
 | --- | --- | --- |
-| **UNLOCK THE CAMPAIGN PHONE** - it went behind its credential lock screen on 2026-09-05 and three LIFE rows plus every later phone row cannot run until it is cleared | 1 gesture on the device | [P2 - every silent push on the phone fails to decrypt](#p2---every-silent-push-on-the-phone-fails-to-decrypt-the-notification-loses-its-preview-and-the-fallback-it-falls-back-to-does-nothing-measured-2026-09-05-first-run-of-notif) |
+| ~~UNLOCK THE CAMPAIGN PHONE~~ **DONE 2026-09-05** (`deviceLocked=0`, measured). What remains is OPTIONAL and the user asked for it: removing the pattern needs the credential, so either they clear it in Settings or it joins `test-accounts.json` like every other one. Retiring the lock costs no key material - both keystore keys are explicitly `setUserAuthenticationRequired(false)`, measured before proposing it | 1 gesture on the device | [P2 - every silent push on the phone fails to decrypt](#p1---a-backgrounded-phone-is-never-told-about-a-message-it-has-already-received-because-the-js-layer-waits-for-a-push-the-server-never-sends-measured-on-device-2026-09-05) |
 | choose how production says it is down - the probe must hit `/api/version`, which needs the database | decision, then ~1 click | [P2 - nothing tells anybody production is down](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click) |
 | should a dev-ONLY trigger exist - today one push deploys both estates and a broken dev BLOCKS production, by design | decision | [dev.canari-emse.fr becomes a real second environment](#devcanari-emsefr-becomes-a-real-second-environment---decided-2026-08-17) |
 | a fine-grained PAT from an account WITH PUSH ACCESS - the App token was measured refused, ten times | decision | [P1 - no identity CI can mint may ask Dependabot to rebuild a branch](#p1---no-identity-ci-can-mint-may-ask-dependabot-to-rebuild-a-branch-so-a-moved-gate-parks-the-whole-queue---and-the-app-token-was-the-recommendation-this-row-itself-made-measured-2026-09-03) |
@@ -1463,9 +1463,71 @@ no check waits on wall-clock time at all. It belongs with the rendering pass, no
 
 ## Messaging convergence
 
-### P2 - every silent push on the phone fails to decrypt, the notification loses its preview, and the fallback it falls back to does nothing (measured 2026-09-05, first run of NOTIF)
+### P1 - a backgrounded phone is never told about a message it has already received, because the JS layer waits for a push the server never sends (measured on device 2026-09-05)
 
-All five NOTIF rows show it and NOTIF-10 FAILS on it. On the phone, for every message:
+**THIS ENTRY SAID SOMETHING ELSE UNTIL 2026-09-05 EVENING, AND THE MECHANISM IT NAMED WAS THE
+WRONG ONE.** It read the `SecretReuseError` below as the reason a backgrounded phone shows no
+notification. It is not: that error belongs to a SILENT frame that was never going to notify
+anybody. The reason is one early return in the client, and it is worse than what was filed. The old
+account is kept below because the observations in it are all real - only the conclusion moved.
+
+## What actually happens, correlated across all three sources on ONE message
+
+The phone was backgrounded with HOME (LIFE-2's premise, app alive), W2 sent one text message.
+
+```
+client   POST /api/mls/send  {"proto":"<348 chars>","silent":false,"durable":true}   <- the message
+client   POST /api/mls/send  {"proto":"<276 chars>","silent":true, "durable":true}   <- a mutation frame
+
+server   17:57:40 [SEND][send-cc0b716e] PUBLISHED recipient=<owner>:tauri-...       <- and NOTHING after it
+server   17:57:42 [SEND][send-2bf6df35] PUBLISHED recipient=<owner>:tauri-...
+server   17:57:52 [PUSH_DEFERRED][send-2bf6df35] still unACKed after 10 s -> FCM fallback
+server   17:57:52 [PUSH_SEND][send-2bf6df35-def] FCM sent ... platform=android
+
+phone    19:57:53 onMessageReceived: queuedMessageId=eaab3c04...   <- the MUTATION, not the message
+phone    19:57:53 thread: ... silent=true
+phone    19:57:57 Silent push decryption failed -> returning silently
+
+result   notifiedInMs=null, shade empty, and `A1 holds the message: 1`
+```
+
+**The visible message never became a push at all.** `scheduleDeferredPush` fires only for a message
+still unACKed after 10 s, and a backgrounded Android app keeps its WebSocket, receives the frame and
+ACKs it - so the server correctly sends nothing. The push that DID arrive was for the silent
+mutation frame beside it, which by definition raises no notification whatever it decrypts to.
+
+**And the client had already decided not to speak.** `notifyInbound` opened with:
+
+```ts
+// Native mobile (Android + iOS) posts its own OS notification from the background push handler,
+// so the JS layer must NOT also fire one - the user would get two.
+if (isMobileTauriRuntime()) return;
+```
+
+The premise holds only when there IS a push. For the ordinary backgrounded case there is none, the
+push handler never runs, and **nobody notifies at all**. The app has the message the whole time; the
+user is simply never told.
+
+**It also explains the pair this campaign had backwards.** LIFE-3, which KILLS the app, passes - a
+killed app cannot ACK, so the deferred push fires and the Kotlin handler notifies. *The phone in a
+pocket was the failing case and the phone that was killed the passing one*, which the earlier
+account noticed and attributed to a spent ratchet generation. The generation is spent, and it is not
+why.
+
+**FIXED 2026-09-05**: the early return is gone. Native mobile now notifies on
+`visibilityState === 'hidden'` - not on "hidden or unfocused", which is the desktop rule: a WebView
+reporting no focus while its activity is on screen would interrupt somebody reading the message.
+Five tests pin both directions, and two of them fail if the early return comes back.
+
+**What is still owed, and it is the overlap rather than the defect.** When a message is unACKed for
+10 s AND the app is alive, both paths can now notify, and they cannot merge into one banner because
+they compute the notification id differently - see the table below. The window is narrow, the
+failure mode is one extra banner rather than a lost message, and it is strictly better than the
+silence it replaces. The id unification is the follow-up.
+
+## The older account, whose observations stand and whose conclusion does not
+
+On the phone, for every message:
 
 ```
 E/openmls: Ciphertext generation out of bounds 433 / SecretReuseError
@@ -1479,8 +1541,10 @@ W/CanariFCM: Decryption failed -> MlsBackgroundWorker enqueued
 D/CanariWorker: doWork: background cleanup completed          <- 60 ms, and it decrypts nothing
 ```
 
-**What the user sees**: `Nouveau message de <name>` with no preview, and on NOTIF-10 that is the only
-notification there ever is - `notifiedInMs: null` for all five messages.
+**What the user sees**: `Nouveau message de <name>` with no preview. NOTIF-10 cuts the RADIOS rather
+than backgrounding the app, so the app is alive, decrypts over its socket when the radios return,
+and the push loses - `notifiedInMs: null` for all five messages there. That row is the one place
+this noise becomes a verdict, and the fix above is what should now carry it.
 
 **Why the generation is already consumed, from the server's own log.** The push is not
 unconditional: `[PUSH_DEFERRED] queuedId=... still unACKed after 10 s -> FCM fallback`, then
@@ -1514,24 +1578,48 @@ comment says it is for "an epoch gap (a commit arrived while the app was closed)
 refusal the catch-up cannot help by construction, and it costs a backend round trip and a worker
 enqueue per message.
 
-**What a fix owes, and why none was written on 2026-09-05.** Two candidate shapes, and the second
-is the cheap one:
+**What a fix owes.** Two halves, and they are independent - the first stops the waste, the second
+restores the preview:
 
 1. Carry the kind to Kotlin as a TYPE - *never branch on an error message* - so a same-epoch refusal
    stops costing a backend round trip and a worker enqueue per message, and can be answered from the
    copy the device already holds.
-2. **Let the JS layer notify when IT is the path that decrypted.** `notifyInbound` excludes native
-   mobile wholesale, on the ground that "the background push handler posts its own" - true only when
-   the push CAN decrypt, and by the ratchet argument exactly one of the two ever can. Both already
-   key their notification per conversation (`stableNotifId` / tag `canari-<id>`), so the app's would
-   REPLACE the contentless fallback rather than duplicate it.
+2. **When the JS layer is the path that decrypted, the preview must reach the notification the
+   platform already has.** `notifyInbound` excludes native mobile wholesale, on the ground that "the
+   background push handler posts its own" - true only when the push CAN decrypt, and by the ratchet
+   argument exactly one of the two ever can.
 
-Neither was attempted, and the reason is a rule rather than a budget: **a green gate is not a working
-system, and three of three iOS defects were invisible to every gate here.** Both shapes change
-notification behaviour on a surface that only hardware can judge, and **the phone went behind its
+**THE SHAPE FILED FOR (2) ON 2026-09-05 WAS WRONG, AND IT WOULD HAVE SHIPPED A SECOND NOTIFICATION.**
+It said the two sides "already key their notification per conversation (`stableNotifId` / tag
+`canari-<id>`), so the app's would REPLACE the contentless fallback". They key per conversation and
+they key it DIFFERENTLY - measured 2026-09-05 by reading both:
+
+| | how the id is computed | what else the notification carries |
+| --- | --- | --- |
+| Kotlin, `CanariFirebaseMessagingService.getStableNotifId` | a **SharedPreferences counter from 1000**, one per `groupId`, `commit()`ed under a lock so two conversations cannot collide | `MessagingStyle`, the reply and mark-as-read actions, the channel, the group summary, the launcher badge |
+| JS, `useNotifications.stableNotifId` | `Math.abs(hash31(conversationId)) \|\| 1` | title and body |
+
+Two id spaces that coincide only by accident, in one `NotificationManager` namespace - so
+`sendNotification({ id })` from the WebView posts a NEW notification beside the contentless one,
+with no actions, no style, no summary and no badge. **Keying "per conversation" is not the same as
+keying on the SAME conversation key**, and the entry above read the first as the second.
+
+**So the shape is a bridge, not a second surface.** The JS layer hands the decrypted preview to the
+native side - one Tauri command reaching the `showNotification` path that already exists (it is
+`private` in the service today, and it already suppresses itself when the app is in the foreground,
+which is the guard this call needs anyway). One notification surface on Android, keyed by the id the
+platform is already using, so a push that DID manage to decrypt and an app that decrypted the same
+message update one notification rather than racing to post two. **Idempotent by construction rather
+than by a check**, which is the only version of this worth shipping.
+
+**Why none was written on 2026-09-05.** A rule rather than a budget: **a green gate is not a working
+system, and three of three iOS defects were invisible to every gate here.** Both halves change
+notification behaviour on a surface only hardware can judge, and **the phone went behind its
 credential lock screen mid-phase** (`deviceLocked=1`, `wm dismiss-keyguard` refused, no credential in
 the rig), so LIFE-6/7/8 never ran and nothing could be re-measured. A notification fix verified only
-by unit tests is exactly the shape that has cost this project three times.
+by unit tests is exactly the shape that has cost this project three times. **The phone answered again
+later the same day**, so the blocking condition is lifted; what is left is the APK build and the
+hardware pass, and the four rows to re-take are the ones in the COMMUNITY entry below.
 
 
 ### P2 - a COMMUNITY message is not decrypted in a background notification, and the KILLED case is unmeasured for both kinds (user, 2026-09-05)
@@ -1546,16 +1634,35 @@ about any other.
 
 | | app BACKGROUNDED | app KILLED |
 | --- | --- | --- |
-| DM or group (per-conversation MLS ratchet) | **FAIL** - LIFE-2, no notification at all and 95 s to arrival | **PASS-DIRTY** - LIFE-3 |
-| Community salon (the community's shared key) | **the user reports it is not decrypted** - nothing here has measured it | **UNMEASURED** |
+| DM or group (per-conversation MLS ratchet) | **FAIL** - LIFE-2, no notification at all. **Cause found and fixed 2026-09-05**; owed a re-run | **PASS-DIRTY** - LIFE-3, and it passes *because* a killed app cannot ACK |
+| Community salon (the community's shared key) | **PASS, measured 2026-09-05** - full plaintext in the shade in 2 244 ms, seed mirrored | **UNMEASURED** |
+| Community salon, seed NEVER mirrored | **UNMEASURED - and this is the user's report's likeliest home** | **UNMEASURED** |
 
 **THE DM ROW'S CAUSE IS ESTABLISHED AND IS NOT THIS ENTRY'S.** It is
-[the silent-push P2](#p2---every-silent-push-on-the-phone-fails-to-decrypt-the-notification-loses-its-preview-and-the-fallback-it-falls-back-to-does-nothing-measured-2026-09-05-first-run-of-notif):
-the phone decrypts over its WebSocket - spending the ratchet generation - but cannot ACK, so the
-server pushes after 10 s a message the device already holds, and a generation is spent once. That is
-also exactly why the KILLED cell passes where the BACKGROUNDED one fails: a killed app has spent no
-generation. **The phone in a pocket is the failing case and the phone that was killed is the passing
-one**, which is the opposite of what anyone would guess.
+[the backgrounded-phone P1](#p1---a-backgrounded-phone-is-never-told-about-a-message-it-has-already-received-because-the-js-layer-waits-for-a-push-the-server-never-sends-measured-on-device-2026-09-05):
+a backgrounded app receives the message over its WebSocket and ACKs it, so the server never sends a
+push at all, and the client had an early return refusing to notify on native mobile. **The phone in
+a pocket is the failing case and the phone that was killed is the passing one** - a killed app
+cannot ACK, so its push does fire. *(Until 2026-09-05 evening this paragraph blamed a spent ratchet
+generation. That was measured and is real, and it is not why the notification is missing.)*
+
+**AND THE SALON HALF DOES NOT REPRODUCE.** Measured on device 2026-09-05, app backgrounded with
+HOME, one message into `Canari Test Venue / #general`: the shade held
+`Canari Test Venue - #general | <the full plaintext>` after **2 244 ms**, and the phone logged
+`handleChannelMessage: showNotification title=... body=<the text> mentionsMe=false`. So the salon
+path decrypts in the background, and it does so through a mechanism that has nothing to do with the
+MLS ratchet: `lookupGraineSeed(channelId, sessionId)` against `graine_seeds.json`, a mirror the
+FOREGROUND writes. **That is where the user's report most likely lives**, and it is a different
+question from the one measured: the run above had A1 open the salon first, which is exactly what
+mirrors the seed. The unmeasured case is a session whose seed was never mirrored - a sender who
+started a new Graine session while this device was away - and its symptom is
+`handleChannelMessage: no seed/ciphertext -> generic notification`.
+
+**That line cannot say which of its four conditions failed**, and it is one `if` with four terms
+(`seedB64`, `ciphertext`, `nonce`, `messageIndex`). A seed that was never mirrored and a ciphertext
+the server declined to inline are opposite problems - one is a mirroring bound, the other a 4 KB FCM
+budget - and they print the same sentence. Naming the term is a one-line change and it is what turns
+the user's report into a diagnosis.
 
 **A COMMUNITY SALON CANNOT INHERIT THAT ANSWER, BECAUSE IT IS NOT THE SAME KEY PATH.** A salon is
 encrypted with the community's shared key
@@ -1571,6 +1678,34 @@ two. All four need the phone, which is
 rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
+
+### P2 - eleven more decisions read a visibility API that lies on every phone, and two of them look like they matter (measured 2026-09-05)
+
+`document.visibilityState` and `document.hasFocus()` are both permanently true in a backgrounded
+Android Tauri WebView - measured, see [durable-rules](durable-rules.md). Two consumers were fixed
+the day it was found, because each had a user-visible defect behind it: the inbound notification and
+the read watermark. **The rest were not touched, and they were not measured either.**
+
+| call site | what it decides | what a permanently-`visible` phone does instead |
+| --- | --- | --- |
+| `mlsStatePersisterLifecycle.ts:16` | persist the MLS state when the page goes hidden | **never persists on backgrounding** - the case the hook exists for is the one it cannot see |
+| `TauriMlsService.ts:173` | reconnect the socket when the page becomes visible | the edge never fires, so a socket dropped while away is not re-opened by this path |
+| `backgroundPausableInterval.ts:29,38` | pause timers while hidden | never pauses - battery, not correctness |
+| `ChatBackgroundService.svelte:881,953,1218,1237` | four guards around login and reconnection | unmeasured |
+| `MainChatPage.svelte:266` | a guard on a periodic refresh | unmeasured |
+| `useMessaging.svelte.ts:750` | the batch-notify log line | says `visible` about a backgrounded phone in the log, which is misleading rather than wrong |
+| `LoginPage.svelte:85` | a retry on becoming visible | unmeasured |
+
+**The first two are the ones worth measuring first**, and the first is the one that could cost
+something durable: a state persister whose trigger never fires on the platform where the process is
+most likely to be killed without warning. That is a hypothesis from reading, not a measurement - the
+phone may well persist on another trigger, and **saying which needs one run, not an argument**.
+
+**The fix shape is settled and cheap**: `isAppInForeground()` already exists and is `true` on every
+runtime that has a working visibility API, so each site becomes one extra term and web and desktop
+keep their current behaviour exactly. What is NOT settled is which sites should change - a guard
+that is merely wasteful on mobile is not the same as one that loses state, and they want different
+urgency.
 
 ### P2 - a frame this device already read is re-accused as lost on every later cold start, and the reconciliation it triggers finds nothing (measured 2026-09-05)
 
