@@ -13,6 +13,17 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device coming back to a busy account got its missing messages three minutes late, because a
+  digest waited for the whole account instead of the conversation it describes.** The leg that
+  describes a store for ONE group waited on `waitForMessageQueueIdle`, which is idle only when the
+  device has applied EVERYTHING - and a device rejoining twenty-nine conversations takes minutes to
+  get there. Measured: a peer asked at 23:47:34 and was answered at 23:50:43, 189 s later. Frames
+  for the other twenty-eight conversations cannot change this group's manifest. The scheduler was
+  already per-group, so the barrier is now scoped to one: it wakes after every frame rather than at
+  the end of a drain, counts the untagged bucket (nothing there can say whose an untagged frame is),
+  refuses to resolve while the drain is inside a frame of that group, and clears its marker even
+  when a handler throws.
+
 - **The history election has never been able to skip a member, because the cap on a member key was
   shorter than every key this platform issues.** `notifyHistoryRequest` filtered the exclusion list
   with `k.length <= 128`. A member key is `userId:deviceId`, where the user id is a 64-character hex

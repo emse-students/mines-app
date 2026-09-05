@@ -1886,7 +1886,7 @@ same string.
 records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
 its id.
 
-### P2 - the history repair is correct now and takes THREE MINUTES, because a digest waits for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
+### P2 - FIXED THE SAME NIGHT - the history repair took THREE MINUTES because a digest waited for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
 
 **The loss is fixed and what is left is a duration.** HEAL-REVOKE-7 `--order last`, on the build
 carrying all three fixes:
@@ -1914,9 +1914,17 @@ different question, and passing this group there would claim a nesting that does
 paragraph in `reconcileGroup` explains what that cost the last time). So this is a new capability on
 the queue, not a new argument: *are there frames pending for THIS group*.
 
-**Until then the cost is visible rather than hidden**: `reachedInMs` is recorded on every reading,
-and a repair that starts taking longer shows up as a number in the ledger instead of as a row that
-suddenly fails.
+**DONE, 2026-09-06.** The scheduler was already per-group - `buckets` is a Map keyed by group with
+its own control/welcome/message tiers - so the capability was one method away rather than a
+redesign: `isGroupIdle` / `waitUntilGroupIdle`, woken after EVERY frame instead of only at the end of
+a drain, and `answerAfterMailboxDrained` now takes the group it is answering about. Three details
+carry the correctness: a frame that has been PICKED is out of its bucket and not yet applied, so the
+drain records which group it is inside; the UNTAGGED bucket is waited for too, because nothing in
+the scheduler can say whose an untagged frame is; and a handler that throws still clears the marker,
+or that group would never read idle again. Five tests on the barrier, one per claim.
+
+**The cost stays visible either way**: `reachedInMs` is recorded on every reading, so a repair that
+starts taking longer shows up as a number in the ledger instead of as a row that suddenly fails.
 
 ### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
 

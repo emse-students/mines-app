@@ -899,6 +899,19 @@ export abstract class BaseMlsService implements IMlsService {
    * Split out of {@link waitForMessageQueueIdle} because {@link fetchPendingMessages} ends on it -
    * calling the full barrier there would have the pull wait on itself.
    */
+  /** @inheritdoc */
+  async waitForGroupQueueIdle(caller: string, groupId: string): Promise<void> {
+    // THE PULL FIRST, exactly as the whole-mailbox barrier does it: a bucket that is empty because
+    // nothing has been FETCHED yet is not a bucket that has nothing left. What this skips is the
+    // other twenty-eight conversations' frames, not the round trip that lists our own.
+    await this.pendingPullInFlight?.catch(() => {});
+    if (this.messageScheduler.isGroupIdle(groupId)) return;
+    console.debug(
+      `[QUEUE] "${caller}" waits for ${groupId.slice(0, 8)}… to have nothing left to apply`
+    );
+    await this.messageScheduler.waitUntilGroupIdle(groupId);
+  }
+
   private async settleMailbox(): Promise<void> {
     await this.pendingPullInFlight?.catch(() => {});
     return this.messageScheduler.waitUntilIdle();

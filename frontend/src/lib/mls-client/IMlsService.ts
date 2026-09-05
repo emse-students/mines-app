@@ -640,6 +640,20 @@ export interface IMlsService {
    */
   waitForMessageQueueIdle(caller: string, catchUpGroupId: string | null): Promise<void>;
   /**
+   * The same barrier scoped to ONE conversation: its frames are applied and none of its is parked.
+   *
+   * **It answers a different question and it is the right one for anything that describes a single
+   * group.** The whole-mailbox barrier means "I have applied everything", which is proportional to
+   * the size of the account - measured at 189 s on a device rejoining twenty-nine conversations,
+   * which is how long a peer waited for a digest of ONE of them. Frames for the other twenty-eight
+   * cannot change that group's manifest.
+   *
+   * The untagged bucket is waited for too, because nothing here can say which group an untagged
+   * frame belongs to. Use the whole-mailbox barrier where the answer depends on the WHOLE store -
+   * an outbox flush, a re-encrypted bundle whose epoch depends on every commit applied.
+   */
+  waitForGroupQueueIdle(caller: string, groupId: string): Promise<void>;
+  /**
    * Tells the service the local conversation store is now authoritative.
    *
    * A frame that arrived before the restore finished was left in the server queue with nothing to

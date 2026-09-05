@@ -427,6 +427,16 @@ again. It terminates on the proof the server already delivers - `no_peer_online`
 reused rather than a new one. One member per step, the set only grows, and forty unreadable frames on
 a group with two online members cost two elections and then a fact.
 
+**AND THE BARRIER THAT MADE IT SLOW IS SCOPED NOW.** `answerAfterMailboxDrained` waited on the
+WHOLE mailbox: idle only once the device had applied everything, which on a device rejoining
+twenty-nine conversations was **189 seconds** between the question and the answer. The reason the
+barrier exists is a claim about the frames of THE GROUP BEING DESCRIBED, so it takes the group it is
+answering about and waits for that one - `waitUntilGroupIdle`, woken after every frame rather than at
+the end of a drain. Three details carry it: a picked frame is out of its bucket and not yet applied,
+so the drain records which group it is inside; the untagged bucket is waited for too, because
+nothing in the scheduler can say whose an untagged frame is; and a handler that throws still clears
+the marker.
+
 **AND THE EXCLUSION IT WALKS ON HAD NEVER WORKED.** The first run of the escalation asked the
 server nine times to skip the sleeping phone and was handed it back every time. The server filtered
 the exclusion list with `k.length <= 128`, and a member key - `userId:deviceId`, a 64-character hex

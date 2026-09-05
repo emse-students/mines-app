@@ -208,7 +208,7 @@ export async function handleSystemEvent(
     // OUR MAILBOX FIRST: a digest computed while this device is still applying its own queue
     // describes a store it is in the middle of completing, so the asker diffs against a snapshot
     // that was already wrong when it was taken.
-    answerAfterMailboxDrained(mlsService, () =>
+    answerAfterMailboxDrained(mlsService, convoKey, () =>
       sendHistoryDigest(convoKey, me, { storage, deviceKeyB64, mlsService, log }).catch((e) =>
         log(`[HISTORY_DIGEST] Could not answer ${senderNorm}: ${String(e).slice(0, 120)}`)
       )
@@ -262,7 +262,7 @@ export async function handleSystemEvent(
       //
       // OUR MAILBOX FIRST, for the same reason every other store read in this file waits: a diff
       // resolved mid-drain names what we hold SO FAR and tells the asker that is all there is.
-      answerAfterMailboxDrained(mlsService, () =>
+      answerAfterMailboxDrained(mlsService, convoKey, () =>
         answerHistoryDigest({
           groupId: convoKey,
           requesterIdentity: from,
@@ -388,7 +388,7 @@ export async function handleSystemEvent(
     // prefix slice resolved mid-drain names the messages we hold SO FAR, so the bundle is short of
     // exactly the frames we were about to apply, and the puller is told that is all there is.
     // Parsing above is pure and stays inline; only what depends on the store is deferred.
-    answerAfterMailboxDrained(mlsService, async () => {
+    answerAfterMailboxDrained(mlsService, convoKey, async () => {
       let wanted = ids;
       if (wanted.length === 0 && prefixes.length > 0) {
         // A range diff resolves to a slice of the id space, never to a message, so the asker cannot

@@ -44,8 +44,10 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
   return {
     mlsService: {
       getDeviceId: () => MY_DEVICE,
-      // The wrapper the late answer runs behind. Resolved, so the answer runs in this test's tick.
-      waitForMessageQueueIdle: vi.fn().mockResolvedValue(undefined),
+      // The wrapper the late answer runs behind - scoped to the group being described, which is
+      // what stops a device rejoining an account from answering minutes late. Resolved, so the
+      // answer runs in this test's tick.
+      waitForGroupQueueIdle: vi.fn().mockResolvedValue(undefined),
     },
     storage: null,
     userId: ME,
