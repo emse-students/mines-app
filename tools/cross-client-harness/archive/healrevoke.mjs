@@ -91,6 +91,8 @@ import {
   DEVICE_PANEL_NARRATION,
   FRESH_CLIENT_NARRATION,
   ignoringExpectedLog,
+  IDP_CONSOLE_NARRATION,
+  REVOKED_RETURN_NARRATION,
   ignoringExpectedRefusal,
   ignoringOfflineCut,
   MINT_REFUSALS,
@@ -138,6 +140,8 @@ const forgiving = (rep, narration) =>
  */
 const asAReturningDevice = (rep) =>
   forgiving(rep, [
+    ...IDP_CONSOLE_NARRATION,
+    ...REVOKED_RETURN_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...FRESH_CLIENT_NARRATION,
     ...BLOCK_LIST_READ_NARRATION,
@@ -146,6 +150,7 @@ const asAReturningDevice = (rep) =>
 /** The reference: a full mint, so the callback's trail, the abandoned id's purge, and a cold client. */
 const asAFreshlyMintedDevice = (rep) =>
   forgiving(rep, [
+    ...IDP_CONSOLE_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
     ...FRESH_CLIENT_NARRATION,
@@ -167,6 +172,8 @@ const asAFreshlyMintedDevice = (rep) =>
  */
 const asTheWipedVictim = (rep) =>
   forgiving(rep, [
+    ...IDP_CONSOLE_NARRATION,
+    ...REVOKED_RETURN_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
     ...FRESH_CLIENT_NARRATION,

@@ -1694,6 +1694,29 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
+### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
+
+`login.mjs` drives the real login, so the observed TAB navigates to Authentik and back - and a
+console observer follows the tab, not the origin. Everything Authentik's front end prints while it
+renders its password stage therefore landed in `unexplained`, attributed to Canari. HEAL-REVOKE-9
+collected ten such lines on its first run, and **every row that logs in collects them**.
+
+The phone report already has the idea: `logcatReport` buckets other Android applications as
+`foreign`, with a count and a tag list rather than an inline dump, precisely because a device writes
+hundreds of lines this rig did not cause. The BROWSER report has no equivalent at all.
+
+**Disposed of for now, not fixed.** `IDP_CONSOLE_NARRATION` names the five sentence shapes and the
+three login dispositions in `healrevoke.mjs` take it - which is a per-row disposition, the campaign's
+own rule, and it works. **The fix is to attribute a console line to the ORIGIN that emitted it** and
+classify anything that is not `SITE` (or `tauri.localhost`) as foreign, at which point no row needs
+the list at all.
+
+**Why it was not done inline**: it rewrites the classifier every runner shares, so it ages a large
+part of the ledger - the same reason the `unlockPin` de-duplication is parked. It belongs between
+rungs. Note that `watch.mjs` was already touched twice on 2026-09-05, so the ledger has been aged
+today regardless; what makes this different is that the earlier edits were ADDITIVE constants and
+this one changes what `clean` means.
+
 ### P3 - the read-receipt half of the visibility fix is unit-tested and OWED a hardware pass, and the probe that would give it needs a different precondition (2026-09-05)
 
 The notification half was verified on the device (shade carries the decrypted text 2 218 ms after
@@ -1775,6 +1798,9 @@ exactly what five cold starts manufacture.
 
 Two things are owed before a fix: whether the thunk is reached at all on these runs, and where the
 duplicate delivery that reaches the decryptor comes from - `[QUEUE] delivery ... arrived twice`
+(**seen again 2026-09-05 on HEAL-REVOKE-9**, on a device that had just been wiped and logged back
+in, which is a SECOND population and a different path into the same line - and after that row's
+noise was named it is the only dirt left there, so it now holds a row at `PASS-DIRTY` on its own)
 recognises one class of duplicate and acknowledges it without decrypting, so this one took a
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.

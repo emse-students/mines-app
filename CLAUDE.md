@@ -231,7 +231,7 @@ noticing. Order = priority. Detail lives where the link says. Defect stories are
 rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
 [cross-client-testing](docs/wiki/cross-client-testing.md).
 
-1. **ELEVEN RUNGS COMPLETE, 140 OF 246 ROWS ANSWERED** - the board is
+1. **ELEVEN RUNGS COMPLETE, 141 OF 246 ROWS ANSWERED** - the board is
    [cross-client-testing](docs/wiki/cross-client-testing.md) and `bun rows.mjs` settles it against
    the ledger. Not `PASS`: TAB-3b, HEAL-NEW-0, HEAL-repair, and eight rows the phone blocks. **PIN
    is 6/11, all `PASS`** since 2026-09-05, written from nothing that day; the five that remain are
