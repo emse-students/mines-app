@@ -2061,6 +2061,51 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
+### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
+
+`HEAL-NEW-11`, `-12` and `-15` were written for a product where a fresh device sat AMBER until some
+member served it. They wait up to 90 s for an "amber alone" state, then start the responder, then
+watch it heal. On `c643a411` that state never arrives:
+
+```
+ 11 749ms  the client is LIVE on /chat - the mint hands over
+102 008ms  never went amber alone within 90s: rows 36, ready 36, syncing 0   (+90 114ms)
+102 008ms  starting the late responder w1
+133 992ms  watching the sidebar ...  settled (+3ms)
+```
+
+**HEAL-NEW-1 is the measurement that explains it, and it is a PASS**: with the phone force-stopped,
+both browsers down and the GATEWAY confirming `extra: []`, a fresh device reaches **36 of 36 ready in
+8.0 s**. It serves itself through the external-join seam - `roster seat with NO queued Welcome and NO
+add in flight - nobody owes us anything; serving ourselves`. **A device holding a roster seat does
+not need a responder**, so a rung built on watching one arrive has nothing left to watch.
+
+  THE LATE WATCH IS A SYMPTOM, NOT THE FAULT, and this matters because the runner already carries a
+  comment about having fixed a 49 s lateness by moving work below the watch. It is 122-166 s now, and
+  every extra second of it is the 90 s amber poll plus the responder boot that the dead premise makes
+  the row wait for. Fixing the arming point would not make these rows observable; it would only make
+  them fail faster.
+
+**WHAT WOULD MAKE THE QUESTION ASKABLE AGAIN is a group the device CANNOT let itself into** - one it
+is owed a Welcome for rather than one it holds a seat in. The product distinguishes them in its own
+log (`already in tree for <id> - skip (will join via queued Welcome)` against the self-service line
+above), so the discriminator exists; what does not exist is a fixture that puts the subject in that
+state deliberately. That is the piece of work, and it is a rung redesign rather than a row edit.
+**Deliberately NOT rescued with a second probe**: `healnew.mjs` says `never a PASS over an unasked
+question, and never a second probe invented to rescue it`, and clicking a healed sidebar to report a
+number would be exactly that.
+
+**A SEPARATE AND SMALLER RIG DEFECT SITS UNDER `HEAL-NEW-2`**, which is `INVALID` on `W2 shares no
+group with this device's 0 row(s)`. The subset is `splitBySubset(before.tiles, ids)` with
+`before = await sidebar(cx)` read moments after the mint hands over - `rows: 0, tiles: []` - so the
+question *which of my rows can this responder serve* is asked of a device that has none yet and can
+only answer "none". **HEAL-NEW-12 is the control that proves it is an ordering fault and not the
+account's membership**: same computation, same peer, **4 of 36 rows in the subset**, because a LATE
+responder is measured after the device has enumerated. The subset must be taken against what the
+device is OWED - the server's active list, which the runner already reads as `server.active` - never
+against tiles rendered at an instant. That one IS a row edit, and it is owed before HEAL-NEW-2 can
+have a verdict at all.
+
 ### P2 - the leader tab does not render a message the follower tab sent, until it re-reads (measured 2026-09-05)
 
 TAB-4b: with two tabs of one account open, a message sent from the SECOND tab renders there, reaches

@@ -650,7 +650,15 @@ export abstract class BaseMlsService implements IMlsService {
         );
         return;
       }
-      await this.delivery.ackMessages(messageIds);
+      try {
+        await this.delivery.ackMessages(messageIds);
+        // One success covers every id a failed attempt had persisted, because the retry merged them
+        // into this payload - so the whole set goes, not just the ids named here.
+        this.unacknowledged.clear();
+      } catch (e) {
+        for (const id of messageIds) this.unacknowledged.add(id);
+        throw e;
+      }
     })();
     const settled = sent.catch(() => {});
     this.ackInFlight = settled;
@@ -1039,9 +1047,11 @@ export abstract class BaseMlsService implements IMlsService {
       },
       done: {
         say:
-          'the pull listed a row this device had already acknowledged - its own ack was still in' +
-          ' flight when the pull was answered, so the server still held the row',
-        accuse: false,
+          'the pull listed a row this device had already acknowledged, AND that acknowledgement had' +
+          ' landed before the pull was issued - `fetchPendingMessages` awaits `ackInFlight`, so' +
+          ' nothing routine explains this: either a pull was started outside that barrier, or the' +
+          ' server answered without recording an ack it had accepted',
+        accuse: true,
       },
     },
     live: {
@@ -1062,13 +1072,45 @@ export abstract class BaseMlsService implements IMlsService {
   };
 
   /**
+   * WHAT `pull:done` MEANS WHEN THE ACK NEVER GOT THROUGH, which is the only routine reading it has
+   * left and the reason the entry above is allowed to accuse.
+   *
+   * A repeat has two possible causes and this device knows which one it is looking at, so it must
+   * not classify by guessing: an ack that LANDED and a row that came back anyway is a defect, while
+   * an ack that could not be delivered leaves the row genuinely owed, and the server listing it
+   * again is correct behaviour. The discriminator is carried from {@link announceAck}, where it is
+   * already known, rather than inferred from the repeat - and the finding in that case is the
+   * `[ACK]` failure upstream, which already accuses. This line is its visible end, not a second
+   * report of it.
+   */
+  private static readonly PULL_DONE_AFTER_A_FAILED_ACK = {
+    say:
+      'the pull listed a row whose acknowledgement never reached the server - it really is still' +
+      ' owed, so this is the [ACK] failure above showing its consequence, not a delivery defect',
+    accuse: false,
+  };
+
+  /**
+   * The ids whose acknowledgement is known to have FAILED, so a repeat of one can be explained.
+   *
+   * Only ever holds the payload of the most recent unsuccessful ack: `ackMessagesWithRetry` merges
+   * everything a failed attempt persisted into the next one, so one success covers all of them and
+   * clears this. That is what bounds it without a cap.
+   */
+  private readonly unacknowledged = new Set<string>();
+
+  /**
    * HOW OFTEN EACH REPEAT SHAPE HAPPENS, which is the reading the shape's SENTENCE cannot give.
    *
-   * Three of the four are crossings nothing can prevent - two channels carry the same row and one
-   * is always late - so their per-occurrence lines said the same true thing over and over. What
-   * decides anything is the rate: `pull:done` at one per send is the ordinary cost of a send under
-   * load (measured 23/25 by FWD-2, 2026-09-05), and the same shape appearing many times for ONE
-   * group is a pull firing on something other than an event, which is a defect.
+   * Two of the four are crossings nothing can prevent - two channels carry the same row and one is
+   * always late - so their per-occurrence lines said the same true thing over and over, and what
+   * decides anything is the rate.
+   *
+   * `pull:done` USED TO BE A THIRD, at one per send: the ordinary cost of a send under load,
+   * measured 23/25 by FWD-2 on 2026-09-05. That measurement described a race that no longer exists
+   * - the ack and the pull it was crossing are now ordered - so the shape has been re-read against
+   * the population it will actually run on rather than kept on the reading that named the last
+   * incident. What is left of it accuses, unless the ack is known to have failed.
    *
    * In the instance and not the module because two services can exist at once in a test.
    */
@@ -1119,7 +1161,12 @@ export abstract class BaseMlsService implements IMlsService {
     // triaged from a log. Its RATE is still the reading that matters - many of these for one group
     // is a pull firing on something other than an event - but the SHAPE is what says whose defect
     // it would be, and the shape is now named.
-    const meaning = BaseMlsService.REPEAT_MEANS[channel][known];
+    // THE DISCRIMINATOR IS CARRIED, NOT GUESSED. Only this instance knows whether the ack for this
+    // row got through, and that is exactly what separates a defect from a consequence.
+    const meaning =
+      channel === 'pull' && known === 'done' && this.unacknowledged.has(queuedMessageId)
+        ? BaseMlsService.PULL_DONE_AFTER_A_FAILED_ACK
+        : BaseMlsService.REPEAT_MEANS[channel][known];
     const shape = `${channel}:${known}` as DeliveryRepeatShape;
     this.repeats[shape] += 1;
     const line =

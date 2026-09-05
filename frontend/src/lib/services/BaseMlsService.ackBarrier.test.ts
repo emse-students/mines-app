@@ -16,8 +16,14 @@
  *
  * AND A FAILING ACK MUST NOT BECOME A STALLED PULL, which is the one way this fix could be worse
  * than the defect. When the ack cannot land, the server really does still hold those rows - a pull
- * that lists them again is telling the truth - so the pull must proceed, and the last case asserts
+ * that lists them again is telling the truth - so the pull must proceed, and one case asserts
  * exactly that.
+ *
+ * THE LAST CASE IS ABOUT WHAT THE LINE SAYS AFTERWARDS, and it is the half that keeps the fix
+ * watched. `pull:done` was classified as routine on a measurement of the race this deletes (23 of
+ * 25 forwards, FWD-2), so leaving it there would describe a state the code now prevents and hide a
+ * regression behind a sentence nobody reads. It accuses instead - unless this device knows the ack
+ * never got through, which is a fact it holds rather than one it has to infer from the repeat.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BaseMlsService } from '$lib/services/BaseMlsService';
@@ -171,6 +177,43 @@ describe('the ack barrier in front of a pull', () => {
     // `row-2` is never sent: acknowledging it now would acknowledge user-a's row as user-b. Nothing
     // is lost - the server still holds it for user-a's next pull.
     expect(order).toEqual(['ack:row-1']);
+  });
+
+  it('accuses a repeat whose ack had landed, and explains one whose ack had not', async () => {
+    let failing = true;
+    poke(svc, {
+      delivery: {
+        ackMessages: vi.fn(async () => {
+          if (failing) throw new Error('offline');
+        }),
+        pullPendingMessagesJson: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+    const grumble = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const note = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const said = (spy: ReturnType<typeof vi.spyOn>) =>
+      spy.mock.calls.map((c) => String(c[0])).join(' | ');
+
+    // A row acknowledged by an ack that could NOT be delivered: the server really does still hold
+    // it, so its repeat is the consequence of the `[ACK]` failure and must not be a second finding.
+    await inner(svc)
+      .announceAck(['row-1'])
+      .catch(() => {});
+    const svcInner = svc as unknown as {
+      rememberDelivery(id: string, state: 'queued' | 'done'): void;
+      admitDelivery(id: string | undefined, channel: 'pull' | 'live'): boolean;
+    };
+    svcInner.rememberDelivery('row-1', 'done');
+    expect(svcInner.admitDelivery('row-1', 'pull')).toBe(false);
+    expect(said(note)).toContain('really is still owed');
+    expect(said(grumble)).not.toContain('row-1');
+
+    // And one whose ack LANDED. Nothing routine explains that any more, so it accuses.
+    failing = false;
+    await inner(svc).announceAck(['row-2']);
+    svcInner.rememberDelivery('row-2', 'done');
+    expect(svcInner.admitDelivery('row-2', 'pull')).toBe(false);
+    expect(said(grumble)).toContain('nothing routine explains this');
   });
 
   it('does not make a later pull wait on an ack that has already landed', async () => {

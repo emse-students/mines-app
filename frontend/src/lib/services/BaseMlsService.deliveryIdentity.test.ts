@@ -126,7 +126,10 @@ describe('a delivery that arrives twice', () => {
     await deliver(row('d4ecf0fe'));
 
     expect(applied).toEqual(['d4ecf0fe']);
-    expect(logged()).toContain('arrived twice');
+    // ON THE ACCUSING CHANNEL SINCE 2026-09-06. `pull:done` was routine while a pull could be
+    // issued beside this device's own ack; `fetchPendingMessages` now waits for that ack, so a
+    // repeat here is no longer explained by a crossing.
+    expect(warned()).toContain('arrived twice');
   });
 
   it('names the channel that offered the second copy, not a guess about both', async () => {
@@ -137,8 +140,9 @@ describe('a delivery that arrives twice', () => {
     await deliver(row('d4ecf0fe'), 'live');
     await deliver(row('d4ecf0fe'), 'pull');
 
-    expect(logged()).toContain('the pull listed a row this device had already acknowledged');
-    expect(warned()).toBe('');
+    expect(warned()).toContain('the pull listed a row this device had already acknowledged');
+    // The SHAPE is what the line has to carry, and it names the pull rather than "one of the two".
+    expect(warned()).not.toContain('the socket delivered a row');
   });
 
   it('explains a routine crossing ONCE and counts the rest, because a rate is not read line by line', async () => {
@@ -147,9 +151,17 @@ describe('a delivery that arrives twice', () => {
     // TWENTY-THREE of them. Every line said the same true thing, so every line was skipped, and a
     // check that opens a busy conversation could not be clean while doing its job. The sentence is
     // worth saying; saying it once per send is not.
+    //
+    // IT IS ASSERTED ON `pull:queued` NOW, AND THE MOVE IS THE POINT. That measurement described a
+    // race the ack barrier has since deleted, so `pull:done` is no longer a routine shape, and
+    // asserting the quiet path on it would pin the code to a reading of a population that has
+    // changed. The MECHANISM is what this case exists for, and the ordinary crossing - two channels
+    // carrying one row, one of them always late - is what still exercises it.
     for (const id of ['d4ecf0fe', 'a1b2c3d4', 'beefcafe']) {
-      await deliver(row(id));
-      await deliver(row(id));
+      // Both copies before the drain can finish, which is what leaves the first one `queued`.
+      inner(svc).enqueueMessage(row(id), 'pull');
+      inner(svc).enqueueMessage(row(id), 'pull');
+      await inner(svc).messageScheduler.waitUntilIdle();
     }
 
     const explained = logged()
@@ -158,9 +170,9 @@ describe('a delivery that arrives twice', () => {
     expect(explained).toHaveLength(1);
     expect(explained[0]).toContain('Further ones of this shape are counted, not printed');
     // Silence is not what replaced them: the count is the thing that answers "how often".
-    expect(svc.deliveryRepeatStats()['pull:done']).toBe(3);
-    // And every repeat is still acknowledged - the counting changed what is PRINTED, nothing else.
-    expect(ack.mock.calls.flatMap((c) => c[0] as string[])).toHaveLength(6);
+    expect(svc.deliveryRepeatStats()['pull:queued']).toBe(3);
+    // And the accusing channel stayed empty, so the quiet path is quiet for the right reason.
+    expect(warned()).toBe('');
   });
 
   it('counts each shape apart, so one loud shape cannot silence another', async () => {
