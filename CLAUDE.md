@@ -238,9 +238,10 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    browser, which is why they are last.
 2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
-3. **FIXED, NOT SHIPPED - THREE defects that each cost a rejoining device its history**, found by
-   HEAL-REVOKE-7/-5: `0 of 3 for ever` is now `3 of 3 in ~1 s`. What remains is a DURATION, filed as
-   a P2 ([history-reconciliation](docs/wiki/protocols/history-reconciliation.md), [backlog](docs/wiki/backlog.md)).
+3. **FIXED, NOT SHIPPED - FOUR defects that each cost a rejoining device its history**, found by
+   HEAL-REVOKE-7/-5, which now reads **`PASS` on both halves, clean**, where it read `0 of 3 for
+   ever` eight times. **HEAL-REVOKE-5 and HEAL-repair are owed a re-run on that build**
+   ([history-reconciliation](docs/wiki/protocols/history-reconciliation.md), `CHANGELOG.md`).
 4. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
    2026-09-05, seen on real people). Merged as #383 with the back-gesture hole `dismissible` was
    missing, and asserted by PIN-11 plus two component test files. **It goes from this list the day a
