@@ -1694,7 +1694,7 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
-### P1 - a device that joins a group is silently told its history is complete, and the messages sent minutes earlier are lost to it for good (measured on the local estate 2026-09-05, five reproductions)
+### P1 - a device that joins a group ends up permanently short of the messages sent just before it arrived, because the responder gives up seven seconds before the answer comes (measured on the local estate 2026-09-05, six reproductions)
 
 **HEAL-REVOKE-5 found it on the first run that ever sent a message.** The runner's own docstring had
 claimed for a week that the world it moves while the device is away is made of *"a group created, a
@@ -1748,34 +1748,64 @@ unreadable - staying silent`: `handleHistoryRequest` writes a line on every bran
 none of them is in the window. **The comparison never ran.** Ninety seconds later the identical ask
 from an identical device ran it and worked.
 
-**WHAT THAT LEAVES, AND IT NEEDS A SERVER-SIDE INSTRUMENT.** `reconcileGroup` asks the SERVER to
-elect the responder - *"it elects the responder and answers `no_peer_online` immediately when there
-is none"* - and the asker logged neither `no member online` nor `every reachable member has stated
-its coverage`, so the server elected somebody. Two candidates remain and one measurement separates
-them: **whether the election named a device that was not there**. The account's older device
-`web-...-mtoqj0hh-a0nb` is on the roster of that group and was offline throughout - W1's own sweep
-says `already in tree ... skip (will join via queued Welcome)` about it. If the election may name a
-roster seat rather than a live socket, the ask is delivered to nobody.
+**THE CAUSE, AND IT IS A RACE BETWEEN TWO CLOCKS ON TWO DIFFERENT DEVICES.** The sixth run caught
+the whole exchange, second by second, with the phone deliberately taken off the socket so only W1
+could be elected:
 
-**WHY IT DOES NOT HEAL, WHICH IS WHAT MAKES IT A P1 RATHER THAN A LATENCY BUG.** The ask is
-coalesced (`recentlyAsked` / `PROBE_COALESCE_MS`) and the only thing that raises it again for a group
-is a NEW unreadable frame or a fresh connection edge. **A device that joined late holds no unreadable
-frame** - the messages predate its membership, so there is nothing for it to notice missing - and the
-reconciler's own trigger is `if (sawUnreadableFrame)`. **You cannot reconcile what you never saw.**
-So the conversation settles, shows READY, shows `amber: []`, and is simply short of three messages,
-for ever, with nothing anywhere saying so.
+| when | who | what |
+| --- | --- | --- |
+| 21:59:14 | returning device | external join, then `[HISTORY_STATE] Sent`, `asked ... whether we hold the same history` |
+| 21:59:14 | **W1** | `Keys differ for b88db381... - asked <returning device> to describe` |
+| ... | returning device | **silence for 67 seconds**, while it externally joins the other nineteen groups |
+| **22:00:14** | **W1** | **`asked ... to describe itself, no digest came`** - it gives up |
+| 22:00:21 | returning device | `holds something different - describing our store` |
+| 22:00:22 | returning device | `[HISTORY_DIGEST] Sent` - **seven seconds too late** |
+| 22:00:38 | reference device | the same exchange, digest in the SAME SECOND, `3 of 3 requested message(s)` sent |
+
+**Both halves are individually reasonable and their assumptions do not meet.** The responder waits
+`HISTORY_PROBE_WAIT_MS`, which is `DIGEST_TTL_MS` = **60 s**. The asker answers a digest request only
+`answerAfterMailboxDrained`, deliberately - *"a digest computed while this device is still applying
+its own queue describes a store it is in the middle of completing"*. **A device that has just come
+back is applying twenty external joins**, so its queue takes longer to drain than the responder is
+willing to wait. The reference wins because it happens to ask when its own queue is already quiet.
+
+**AND NOTHING RETRIES.** The ask is coalesced (`recentlyAsked` / `PROBE_COALESCE_MS` = 30 s) and the
+only thing that raises it again for a group is a NEW unreadable frame or a fresh connection edge.
+**A device that joined late holds no unreadable frame** - the messages predate its membership, so
+there is nothing for it to notice missing, and the reconciler's own trigger is
+`if (sawUnreadableFrame)`. **You cannot reconcile what you never saw.** So the conversation settles,
+shows READY, shows `amber: []`, and is simply short of three messages, for ever, with nothing
+anywhere saying so.
+
+**THIS IS ALSO WHAT HEAL-repair IS BLOCKED ON.** That row is `PARTIAL` - 7 of 14 reached the peer -
+and the open question written beside it is the string `no digest came`. It is the same line, from
+the same branch, for the same reason. **One cause, two rows**, and the second one has been open since
+2026-09-05 morning with no mechanism proposed.
+
+**TWO HYPOTHESES WERE MEASURED AND KILLED FIRST**, which is why the one above is stated plainly.
+*The server elected a device that was not there*: the election reads `user:online:<user>:<device>`
+before forwarding and skips anything else, so it cannot. *The elected member was the phone, online
+but frozen*: the phone IS a member of that group and WAS online, and the Android was measured
+`Awake`, `mState=ACTIVE`, Canari the top resumed activity - not frozen - and the failure reproduced
+identically with the phone force-stopped and off the socket entirely.
 
 **IT IS THE USER'S OWN REPORTED SYMPTOM CLASS**, and it is worth reading beside the P1 about twelve
 dropped messages: *"j'ai l'impression de n'avoir qu'une petite partie des messages qu'il m'envoie"*.
 A conversation that is READY and incomplete is indistinguishable, to its owner, from one that is
 complete.
 
-**WHAT IS OWED, IN ORDER.** Measure the election - one read of what the server returns for a group
-whose only other member is offline. Then decide where the repair belongs: a device that has just
-JOINED a group knows it holds no history for it, and that is a stronger trigger than an unreadable
-frame, because it is available exactly when the gap is created. The runner records the whole
-`[READD]`/`[HISTORY*]` trail of all three clients on every run now, so the next measurement is a
-re-run rather than an investigation.
+**WHAT THE FIX HAS TO SATISFY, and a deadline is not it** ([durable-rules](durable-rules.md):
+*termination comes from a proof, never from a clock*). Raising the 60 s buys the next slower boot
+nothing. The two shapes worth weighing: the responder could keep the solicitation open against
+DURABLE state rather than a timer, so a digest arriving late is still answered; or the asker could
+treat *"I have just joined a group and hold no history for it"* as a trigger in its own right, which
+is strictly better than an unreadable frame because it is available exactly when the gap is created
+and does not depend on anybody's queue. The second also closes the case where the responder never
+answered at all.
+
+**The instrument is in and the next measurement is a re-run, not an investigation.** The runner
+records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
+its id.
 
 ### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
 
