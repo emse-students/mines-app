@@ -51,10 +51,12 @@ import { finishObserved, record, unmet } from "../results.mjs";
 import { splitBySubset, subsetSettled } from "./servable.mjs";
 import { activeGroupIds, amberListCost, cut, navigationCost, readAll, sidebar, whoAmI, watch as watchRows } from "./syncrows.mjs";
 import {
+  BLOCK_LIST_READ_NARRATION,
   DEVICE_PANEL_NARRATION,
   ignoringExpectedLog,
   ignoringExpectedRefusal,
   MINT_REFUSALS,
+  NO_LOCAL_STATE_NARRATION,
   OIDC_LOGIN_NARRATION,
   report,
 } from "../watch.mjs";
@@ -82,6 +84,26 @@ import {
  * `[DevicePanel] Deleted` is somebody's device disappearing. Widening `BENIGN` would silence them
  * for the forty-eight checks where they would be the finding.
  *
+ * THE FOURTH LIST WAS MISSING FOR THE WHOLE RUNG AND COST HEAL-NEW-1 A `PASS`, 2026-09-06.
+ * `NO_LOCAL_STATE_NARRATION` already held this row's dirt verbatim -
+ * `[PENDING] Group <id> absent locally -> recovery requested`, twenty-three of them - and its own
+ * comment in `watch.mjs` says what it is for: lines that are about **holding no MLS state, which
+ * a wiped device and a fresh mint are equally**. `healrevoke.mjs` names it; this file, whose
+ * entire subject is a device that holds nothing, did not. So every HEAL-NEW row was `PASS-DIRTY`
+ * on its own premise working - the recovery seam being asked for each group is the MECHANISM,
+ * and it is the observation that says the seam ran at all.
+ *
+ * THE FIFTH IS `BLOCK_LIST_READ_NARRATION`, MISSING FOR THE SAME REASON AND FOUND THE SAME WAY -
+ * it was the ONE line left after the fourth was named. `healrevoke.mjs`, `pinrows.mjs` and
+ * `mention.mjs` all name it; its own comment says why it can be named anywhere at all: it is a
+ * bare function-entry tag with no payload, emitted wherever a view reading the block list mounts,
+ * and `CLAUDE.md` MANDATES a log at function entry. A rule that counted one as dirt would be
+ * asking the code to break this project's own standard.
+ *
+ * IT IS STILL A CALLER'S ACT AND STILL NARROW: the filter is applied to `report(w3)` alone, the
+ * freshly minted device. On W1 or W2 the same line is a device that LOST a group, which is a
+ * finding, and nothing here forgives it there.
+ *
  * THE ORDER IS LOAD-BEARING, for the reason DEL-2 records: `ignoringExpectedLog` recomputes `clean`
  * over `badHttp` AS IT FINDS IT, so the refresh `401` has to be forgiven first or the whole run
  * stays dirty on a request that was already explained.
@@ -90,6 +112,8 @@ const withoutTheMintsOwnNoise = (rep) =>
   ignoringExpectedLog(ignoringExpectedRefusal(rep, MINT_REFUSALS), [
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
+    ...NO_LOCAL_STATE_NARRATION,
+    ...BLOCK_LIST_READ_NARRATION,
   ]);
 
 const argv = process.argv.slice(2);

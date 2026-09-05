@@ -2337,6 +2337,25 @@ asking for something it should not need. **The prod measurement this entry is wa
 local reproduction to be taken against**, which is cheaper to instrument and does not need a
 production window.
 
+**AND IT HAS A COST NOBODY HAD PRICED, MEASURED ON HEAL-REVOKE-8 THE SAME NIGHT.** In one run, in
+one group, thirteen seconds apart:
+
+```
+01:15:09  [KICK] Stale leaf <the phone> removed from d4dc24a2...
+01:15:22  [HISTORY_RECONCILE] d4dc24a2... still holds frames it cannot read
+          while <the same phone> answers nothing - electing somebody else
+```
+
+**A device whose leaf has just been kicked cannot answer a history solicitation for that group**,
+and the server's responder election is RANDOM among the members it sees online. So every group
+this loop touches carries a member that is elected like any other and is silently a dead end. That
+is not a second defect - it is this one's blast radius, and it explains why the history exchange
+looked intermittent rather than broken: the run's outcome depended on which member the dice named.
+**The escalation shipped on 2026-09-06 rotates past a silent responder, so the repair no longer
+depends on the election being lucky** - which is the right architecture regardless, since no client
+may assume a particular peer answers. It does NOT close this entry: a dead responder is still a
+member losing its seat, and the wasted round trip is real.
+
 > **A FIFTH HALF WAS FOUND ON 2026-09-04 AND FIXED THE SAME DAY, AND IT IS THE ONE THAT MADE THE
 > OTHER FOUR UNREACHABLE FOR PART OF THE POPULATION.** Everything above negotiates what a `pending`
 > row MEANS; none of it runs for a device whose local WASM still holds the group, because

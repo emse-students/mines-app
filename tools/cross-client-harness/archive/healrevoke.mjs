@@ -302,6 +302,10 @@ const ROWS = {
     id: "HEAL-REVOKE-3",
     what: "the first reconnection resynchronises as a new device would, and a shortfall is REPORTED",
   },
+  4: {
+    id: "HEAL-REVOKE-4",
+    what: "the diff catches up what the first reconnection missed, and the TRIGGERS are asserted",
+  },
   5: { id: "HEAL-REVOKE-5", what: "revoked, the world changes a lot, then it returns" },
   7: { id: "HEAL-REVOKE-7", what: "the ORDER of the return", orders: ["first", "last"] },
   8: { id: "HEAL-REVOKE-8", what: "a group deleted while the device was revoked" },
@@ -1871,6 +1875,77 @@ if (row.id === "HEAL-REVOKE-3") {
   expectations.aShortfallWasREPORTEDAndNotHidden = gap.length === 0 || returnedAmber.length > 0;
 }
 
+// ROW 4 IS THE ONE A GREEN RUN CAN MOST EASILY FAKE, and the campaign says so in as many words: a
+// heal firing on every connection would satisfy "it caught up" while proving nothing. So this row
+// asserts the TRIGGER CONDITIONS, in the only form a blind resend cannot satisfy - by requiring the
+// mechanism to be caught DECLINING to act, in the same run, on stated evidence. Something that
+// always fires never logs a refusal; something that reasons does.
+//
+// EVERY CLAUSE READS A LINE THE PRODUCT ALREADY WRITES. None of this is new instrumentation, and
+// that is deliberate: a trigger assertion that needed its own probe would be measuring the probe.
+// The trails are read from BOTH SIDES because the diff is computed by the RESPONDER and applied by
+// the ASKER, and a bundle that was never sent and one that was sent and not applied are the same
+// absence on the asker alone.
+let row4Triggers = null;
+if (row.id === "HEAL-REVOKE-4") {
+  const askerSaid = (re) => (returnedTrail?.mine ?? []).some((l) => re.test(l));
+  const responderSaid = (re) =>
+    (actorTrail?.mine ?? []).concat(actorTrail?.lines ?? []).some((l) => re.test(l));
+  const anybodySaid = (re) =>
+    [returnedTrail, actorTrail, freshTrail].some((t) =>
+      (t?.mine ?? []).concat(t?.lines ?? []).some((l) => re.test(l)),
+    );
+
+  // THE CATCH-UP WENT THROUGH THE DIFF, said on both sides: the asker describes its store, the
+  // responder answers with a bundle, the asker applies it. Any one of the three alone is consistent
+  // with a device that was simply sent everything by somebody who never compared anything.
+  expectations.theAskerDESCRIBEDItsStore = askerSaid(/\[HISTORY_DIGEST\] Sent for/);
+  expectations.theResponderANSWEREDWithADiff = responderSaid(
+    /\[HISTORY_BUNDLE\] Diff sent for .*\d+ of \d+ requested message/,
+  );
+  expectations.theAskerAPPLIEDTheAnswer = askerSaid(/\[HISTORY_BUNDLE\] \d+ messages? received/);
+
+  // AND IT WAS A DIFF RATHER THAN A DUMP. The responder states its arithmetic - what it will send
+  // and what it must pull - and the row reads that sentence rather than inferring from a count,
+  // because a responder that shipped its whole store would produce the same arrival on the asker.
+  expectations.theResponderStatedTheArithmetic = responderSaid(
+    /\[HISTORY_REQ\] .*diff with .*\d+ to send, \d+ to pull/,
+  );
+
+  // THE ANTI-FAKE CLAUSE, AND THE REASON THIS ROW IS NOT HEAL-REVOKE-3 WITH EXTRA WORDS. The
+  // mechanism must be observed REFUSING at least once, on evidence it states: either a comparison
+  // found the two stores identical and concluded there was nothing to do, or the coalescer declined
+  // a second ask because the first is still the exchange that repairs this. A heal that fires on
+  // every connection can produce every line above and can produce NEITHER of these.
+  const refusedBecauseTheStatesMatch = anybodySaid(
+    /\[HISTORY_REQ\] .*same state as .*nothing to do/,
+  );
+  const refusedBecauseItAlreadyAsked = anybodySaid(
+    /was asked 30s ago at most - not asking again/,
+  );
+  expectations.theTriggerIsCONDITIONALNotBlind =
+    refusedBecauseTheStatesMatch || refusedBecauseItAlreadyAsked;
+
+  // AND EVERY ASK NAMED ITS REASON. This product solicits only behind a stated condition - the keys
+  // differ, or frames are held that cannot be read. An ask with no such sentence before it is a
+  // timer, which is the shape the standing directive forbids outright.
+  expectations.theAskNamedItsReason = anybodySaid(
+    /holds something different for|holds \d+ frame\(s\) it can never read|Keys differ for/,
+  );
+
+  // RECORDED, NEVER ASSERTED. The escalation fires only when an elected responder stays silent, and
+  // WHICH member the server elects is random by design - so a run whose first election answers is a
+  // correct run and asserting this would fail it. It is captured because when it does fire it is
+  // the most informative line in the trail, and because it is the mechanism added on 2026-09-06.
+  row4Triggers = {
+    escalatedPastASilentResponder: anybodySaid(
+      /still holds frames it cannot read while .*answers nothing - electing somebody else/,
+    ),
+    refusedBecauseTheStatesMatch,
+    refusedBecauseItAlreadyAsked,
+  };
+}
+
 // Row 8 is the deletion row, so its own subject must have been set up: a deletion that never
 // happened cannot be shown not to come back, and a PASS there would be vacuous.
 if (row.id === "HEAL-REVOKE-8") expectations.theDeletionActuallyHappened = deleted === true;
@@ -1914,6 +1989,9 @@ const observers = {
 const detail = {
   what: row.what,
   order,
+  // NULL ON EVERY ROW BUT 4, and named rather than spread so a reader of the ledger can see that
+  // the trigger evidence was LOOKED FOR and found absent, not simply never collected.
+  triggers: row4Triggers,
   slots: { before: slotsBefore, after: slotsAfter, cap: MAX_DEVICES_PER_USER },
   seed: {
     deviceId: victimBefore.deviceId,
