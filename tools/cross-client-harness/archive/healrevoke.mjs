@@ -2,11 +2,27 @@
 /**
  * THE REVOKED DEVICE THAT COMES BACK AFTER THE WORLD MOVED - one runner, one row per invocation.
  *
+ *   bun healrevoke.mjs --row 1                  is the local store actually gone after a revocation?
  *   bun healrevoke.mjs --row 5                  revoked, the world changes a lot, then it returns
  *   bun healrevoke.mjs --row 7 --order first    it returns BEFORE the other devices are online
  *   bun healrevoke.mjs --row 7 --order last     it returns AFTER they are
  *   bun healrevoke.mjs --row 8                  a group DELETED while it was away
  *   bun healrevoke.mjs --row 9                  revoked while it was OFFLINE - a deferred wipe
+ *
+ * ROW 1 STOPS AT THE WIPE, AND STOPPING THERE IS THE POINT RATHER THAN AN ECONOMY. Its question is
+ * the user's own report - a revoked device that kept everything - and that is a claim about ONE
+ * instant: the disk, after the device has been told it is gone. Everything past that instant makes
+ * the claim HARDER to read, not easier, because a re-enrolment writes state back: the login that
+ * follows a wipe mints a device immediately, so `CanariDB_<userId>` exists again under the same name
+ * within seconds and no later sample can tell a store that survived from one that was rebuilt. Rows
+ * 2, 3 and the return equality are about what a returning device ENDS with; this row is about
+ * whether anything was left for it to find, and it is the only row that can be.
+ *
+ * IT COSTS ONE ENROLMENT AND NO 2FA, WHICH IS WHY IT IS FIRST ON THE RUNG. The reference device the
+ * equality rows mint is what makes them expensive; this row needs no reference, because "empty" is
+ * not a quantity to compare against anything. It creates the doomed group all the same, and deletes
+ * it before it exits: a wipe measured on a device that held nothing proves nothing, so the victim is
+ * made to hold real MLS state first, and the group is not left behind for a sweep to find.
  *
  * ROW 9 IS ITS OWN QUESTION AND STOPS EARLIER THAN THE OTHERS. `isDeviceRevoked` answers `false`
  * when it cannot reach the server, because a transport failure is not an answer - so a device
@@ -206,6 +222,11 @@ const VICTIM = "W3";
 const ACTOR = "W1";
 
 const ROWS = {
+  1: {
+    id: "HEAL-REVOKE-1",
+    what: "revoked through the device panel - is the local store actually gone?",
+    stopsAtTheWipe: true,
+  },
   5: { id: "HEAL-REVOKE-5", what: "revoked, the world changes a lot, then it returns" },
   7: { id: "HEAL-REVOKE-7", what: "the ORDER of the return", orders: ["first", "last"] },
   8: { id: "HEAL-REVOKE-8", what: "a group deleted while the device was revoked" },
@@ -1110,6 +1131,85 @@ note(`what the wipe left on the victim ${JSON.stringify(leftBehind)}`);
 // observer covering the instant this rung is about, and until 2026-08-29 no verdict looked at it.
 const wipeReport = asTheWipedVictim(await report(seedObserver));
 seeded.cx.close();
+
+// ---------------------------------------------------------------------------------------------
+// ROW 1 ENDS HERE - the disk has been read at the one instant that can answer its question.
+// ---------------------------------------------------------------------------------------------
+if (row.stopsAtTheWipe) {
+  // The doomed group existed only to give the wipe something real to take. Deleting it here keeps
+  // the row from leaving debris a sweep has to find later, and its outcome is recorded rather than
+  // assumed - a delete that threw is worth one line, and it is not this row's subject.
+  const tidied = await deleteGroup(actorCx, doomed).then(
+    () => true,
+    (e) => {
+      note(`tidying ${doomed} threw: ${firstLine(e)}`);
+      return false;
+    },
+  );
+  note(`${doomed} tidied away: ${tidied}`);
+
+  const slotsAtTheWipe = victimBefore.userId ? enrolledDeviceCount(victimBefore.userId) : null;
+  note(`the account spends ${slotsAtTheWipe}/${MAX_DEVICES_PER_USER} device slot(s) after this row`);
+
+  const wipeExpectations = {
+    /** There was something to lose. A wipe measured on an empty device is a vacuous PASS. */
+    theVictimHeldTheWorldFirst: seedSettle.settled === true && heldTheDoomedGroup === true,
+    /** The order was given, and it landed: the decision is durable AND the effect is visible. */
+    theServerRecordedTheRevocation: revocation.revoked === true,
+    theServerForgotTheDevice:
+      revocation.wasAddressable === true && revocation.stillAddressable === false,
+    /** The device obeyed, said so, and finished saying so. */
+    theDeviceWipedItself: wipe.wipeRan === true && wipe.wipeFinished === true,
+    noWipeStepFailed: wipe.wipeIncomplete !== true && wipe.stepsFailed === 0,
+    /**
+     * THE PRODUCT'S OWN ACCUSATION, ASSERTED SEPARATELY FROM THE DISK. `[RESET] N store(s) SURVIVED
+     * the wipe` is the app naming this row's defect in as many words, and it is not the same claim
+     * as an empty disk: the app can say it survived and be right, or say nothing and still have
+     * left something a `deleteDatabase` never reached. Two independent witnesses, two lines.
+     */
+    noStoreSurvivedTheWipe: wipe.storesSurvived === false,
+    /**
+     * AND THE DISK AGREES - THE ROW ITSELF. One database left is the P1 the user found, not dirt.
+     * `localStorage` is NOT asserted at zero: the page writes `PARAGLIDE_LOCALE` back the instant it
+     * renders, and a locale is not an identity. A DATABASE is, because nothing re-creates one
+     * without an MLS client.
+     */
+    theWipeLeftNothingOfTheAccount: leftBehind.empty === true,
+    theDiskWasActuallyRead: leftBehind.readable === true,
+    /** The instrument looked. A zero from a console nobody read is evidence for nothing. */
+    theWipeWindowWasActuallyRead: wipe.linesRead > 0,
+    theSettlePredicateKnewWhatToWaitFor: seedTarget.ids.size > 0,
+    timelineIsStamped: timeline.every((m) => typeof m.at === "number" && typeof m.wall === "string"),
+  };
+  const wipeMissing = unmet(wipeExpectations);
+  const wipeVerdict = wipeMissing.length === 0 ? "PASS" : "FAIL";
+  const wipeObservers = {
+    victim: wipeReport,
+    actor: asTheActor(await report(actorObserver)),
+  };
+  const wipeDetail = {
+    what: row.what,
+    slots: { before: slotsBefore, after: slotsAtTheWipe, cap: MAX_DEVICES_PER_USER },
+    seed: {
+      deviceId: victimBefore.deviceId,
+      settledInMs: seedSettle.settled ? seedSettle.elapsedMs : null,
+      waitedFor: seedTarget.ids.size,
+      servableFrom: seedTarget.from,
+      state: seedState,
+      stillAmber: seedAmber,
+      heldTheDoomedGroup,
+    },
+    revocation,
+    wipe,
+    leftBehind,
+    world: { held: doomed, tidiedAway: tidied },
+    timeline,
+    unmet: wipeMissing,
+    observers: wipeObservers,
+  };
+  actorCx.close();
+  await finishObserved(row.id, wipeVerdict, wipeDetail, wipeObservers, restoreTheFleet);
+}
 
 // ---------------------------------------------------------------------------------------------
 // THE WORLD MOVES. Both KINDS of change, because they are repaired by different mechanisms: a

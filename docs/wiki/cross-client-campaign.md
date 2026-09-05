@@ -1210,6 +1210,46 @@ The cells carried these as prose; they are design, and the board is a state tabl
   start inside the login, which is a different primitive. The trunk decides which; a third widening of
   the watch would not reach it.
 
+### HEAL-REVOKE-1, 2026-09-05 - the P1 does not reproduce, and the row's first `INVALID` was the rig blaming the product
+
+**The row.** A device the account had just enrolled, holding 7 of 7 rows plus a group minted so the
+wipe would have something real to take, revoked through the product's own device panel. The server
+recorded the decision in 276 ms and the device left the census 670 ms later. The device's own
+`[RESET]` trail reported the wipe run and finished, `0` failed steps, no `store(s) SURVIVED` line.
+The disk, read seconds after the trail so anything still running had time to put state back, held
+**0 Canari databases, 0 identity keys, 0 localStorage keys**. `PASS`, clean, `unmet: []`.
+
+**It asserts two witnesses and not one, deliberately.** The app can be right about a wipe it did not
+complete, and a `deleteDatabase` can leave something no log mentions - those are the two defects this
+entry's backlog history already records, and they wore the same report. So the log claim and the disk
+claim are separate expectations.
+
+**IT STOPS AT THE WIPE, AND THAT IS THE ONLY INSTANT THAT CAN ANSWER ITS QUESTION.** A re-enrolment
+writes `CanariDB_<userId>` back under the same name within seconds of the wipe, so no later sample
+separates a store that survived from one that was rebuilt. Whether a returning device ENDS where a
+fresh one ends is a different claim, and it belongs to HEAL-REVOKE-2 and -3.
+
+**AND THE FIRST RUN WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S.** It wrote *"the victim
+could not be brought to an enrolled starting point, so there is nothing to revoke"* - a sentence that
+reads exactly like a product fault. `newdevice.mjs` spawned `login.mjs` by BARE NAME with no `cwd`,
+so every mint driven from `archive/` - which is where every HEAL-REVOKE row runs - exited 1 with
+`Module not found "login.mjs"` on a stderr the helper discarded, and reported `login ok=false`.
+
+**NINTH SIGHTING, AND THE FIRST ONE THE GATE HAD BEEN GREEN FOR.** `spawn-selftest.mjs` exists for
+exactly this defect and forbade *a bare string literal in argv*; this site spawns `[script, ...args]`
+out of a two-line helper whose callers write `run("login.mjs", ...)`. **A literal at the call site
+and a variable at the spawn is invisible to a rule about argv.** The gate is now an allowlist of the
+property it was always claiming - the path handed to the runtime must be ABSOLUTE, so
+`requireScript(...)`, `join(...)` and a runtime flag are accepted and everything else, a variable
+included, is rejected - and the old line is kept as a specimen so the shape can never stop being
+seen. Rule in [durable-rules](durable-rules.md).
+
+**One board fault came out of the same session.** LIFE-2's cell quoted a notification shade
+containing a `|`, which markdown reads as a column separator: the table silently grew a column, and
+`rows.mjs` - which takes the LAST cell as the state - reported `board: unstated` against a ledger
+holding `PASS`. The message named the wrong problem, so the reader now checks the cell COUNT (three
+after the id, everywhere, measured across all 246 rows) and says so first.
+
 ### The HEAL rung's first two nights, and the device cap under all of it
 
 **WHAT THE FIRST NIGHT OF THIS RUNG ACTUALLY MEASURED, 2026-08-28.** Five rows died in a row -

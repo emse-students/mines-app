@@ -3010,9 +3010,32 @@ Three separate things, in the order they have to be answered:
    blocked" are two different defects wearing one report, and only the first was known.
 
    **THIS DOES NOT CLOSE THE ENTRY, AND MUST NOT BE READ AS CLOSING IT.** Points 2 and 3 below are
-   untouched by both fixes, and HEAL-REVOKE-1 - the row that asks this entry's own question - is
-   still `pending` with no runner. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build
-   carrying `da0ce2f2`, not the inference that the cause found must have been the cause reported.
+   untouched by both fixes. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build carrying
+   `da0ce2f2`, not the inference that the cause found must have been the cause reported.
+
+   **HEAL-REVOKE-1 RAN ON 2026-09-05 AND THE SYMPTOM DOES NOT REPRODUCE - `PASS`, clean, `unmet: []`
+   on `2862d958`.** A device that held 7 of 7 rows plus a group minted for the row was revoked
+   through the product's own panel; the server recorded the decision in 276 ms and the device left
+   the census 670 ms later; the device's `[RESET]` trail reported the wipe run and finished with no
+   failed step and no `store(s) SURVIVED` line; and the disk, read seconds after the trail, held
+   **0 Canari databases, 0 identity keys, 0 localStorage keys**. **Two independent witnesses, and the
+   row asserts both** - the app can be right about a wipe it did not complete, and a `deleteDatabase`
+   can leave something no log mentions.
+
+   **WHAT THAT DOES AND DOES NOT SETTLE.** It settles the first instant, which is the only one that
+   can be read: a re-enrolment writes `CanariDB_<userId>` back under the same name within seconds, so
+   no later sample separates a store that survived from one that was rebuilt. It does NOT settle
+   points 2 and 3, and it does not settle the RETURN - whether a device that comes back ends where a
+   fresh one ends is HEAL-REVOKE-2 and -3, and those rows have no runner yet. **The entry stays open
+   on them**, not on this half.
+
+   **AND THE FIRST ATTEMPT AT THIS ROW WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S**, which
+   is worth recording because the sentence it wrote read exactly like one: *"the victim could not be
+   brought to an enrolled starting point"*. `newdevice.mjs` spawned `login.mjs` by BARE NAME, so
+   every mint driven from `archive/` - which is every HEAL-REVOKE row - exited 1 with `Module not
+   found` on a stderr the helper discarded. Ninth sighting of that defect and the first one
+   `spawn-selftest.mjs` had been green for; the gate is now an allowlist of resolved forms rather
+   than a ban on one spelling ([durable-rules](durable-rules.md)).
 
    **AND THE PARAGRAPH ABOVE WAS HALF WRONG, CORRECTED BY MEASUREMENT 2026-08-28.** The wipe was
    thorough and the trigger was missing - both true - but the wipe was also **not permanent**, which

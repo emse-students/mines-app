@@ -48,6 +48,7 @@ import { APP_TAB, client, ensureChat } from "./chat.mjs";
 import { evaluate, until } from "./cdp.mjs";
 import { ORIGIN, PORTS } from "./names.mjs";
 import { recordObserved } from "./results.mjs";
+import { HARNESS_ROOT, requireScript } from "./scriptpath.mjs";
 import { watch } from "./watch.mjs";
 
 /**
@@ -120,9 +121,22 @@ const stage = (s) =>
 // as the same missing tick. `pin.mjs` exits 2 for "no unlock modal on screen", which is an
 // OBSERVATION about the product, not a failure of the rig - and read as a failure it took HEAL-NEW-0
 // to FAIL on 2026-08-28 with every other expectation of the primitive true.
+//
+// RESOLVED, NOT NAMED - THE NINTH SIGHTING OF THAT DEFECT AND THE FIRST ONE THE GATE COULD NOT SEE.
+// This spawned `login.mjs` as a bare name with no `cwd`, so it resolved against whatever directory
+// the caller happened to be in. From the harness root that works; from `archive/` - which is where
+// every HEAL-REVOKE row runs - it exits 1 with `Module not found "login.mjs"` on a stderr this
+// function discards, and the mint reports `login ok=false`. HEAL-REVOKE-1 recorded `INVALID` on it
+// on 2026-09-05 and the sentence it wrote was about the PRODUCT: "the victim could not be brought
+// to an enrolled starting point". `spawn-selftest.mjs` had forbidden this exact shape since that
+// morning and passed this file every time, because the name is a literal at the CALL SITE and a
+// VARIABLE here - one line of indirection is all it takes to hide from a rule written about argv.
 const run = (script, args) => {
   stage(`spawn ${script} ${args.join(" ")}`);
-  const r = spawnSync(process.execPath, [script, ...args], { stdio: "inherit" });
+  const r = spawnSync(process.execPath, [requireScript(script), ...args], {
+    stdio: "inherit",
+    cwd: HARNESS_ROOT,
+  });
   return r.status;
 };
 
