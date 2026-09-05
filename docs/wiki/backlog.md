@@ -2028,8 +2028,26 @@ checkpoint flush", deliberately, so the cursor never runs ahead of the persisted
 that ends before that flush keeps the accusation and loses the record of having made it**, which is
 exactly what five cold starts manufacture.
 
-Two things are owed before a fix: whether the thunk is reached at all on these runs, and where the
-duplicate delivery that reaches the decryptor comes from - `[QUEUE] delivery ... arrived twice`
+**THE SECOND HALF IS ANSWERED AND FIXED, 2026-09-06.** The duplicate delivery is gone and its cause
+was not subtle once the population named it - the race is SCHEDULED, not incidental. `onDrainEnd`
+acknowledges the rows it just drained with a `void`ed `ackMessages(ackIds)`, and then, in the SAME
+TICK, `refetchFramesLeftBehind` calls `void this.fetchPendingMessages()` whenever a Welcome landed.
+The server has not recorded the ack yet, so it lists those rows again and the device meets its own
+frames a second time. **`HEAL-NEW-1` is what made it certain**: an equally empty store, the same
+pull, and no duplicate - because nothing was online to deliver anything, so there was no drain, no
+ack and no re-fetch.
+
+The fix deletes the overlap rather than tolerating it, which is what WP-DUPDELIVERY-1 did to the
+mirror-image race in 2026-08: every ack now goes through `announceAck`, which chains them and
+publishes `ackInFlight`, and `fetchPendingMessages` awaits it before pulling. **Fire-and-forget was
+never the problem and is kept** - a drain must not wait on a round trip - it was fire-and-forget
+*unannounced*. A FAILED ack deliberately does not hold the pull: the server really does still hold
+those rows, so a pull that lists them again is telling the truth. Asserted in
+`BaseMlsService.ackBarrier.test.ts` on the ORDER rather than on a count, since a count would pass on
+a sleep.
+
+One thing is still owed on the FIRST half: whether the thunk is reached at all on these runs -
+`[QUEUE] delivery ... arrived twice`
 (**seen four times on 2026-09-05, and the three new ones narrow it**: TAB-3b, then HEAL-REVOKE-9 and
 HEAL-REVOKE-2 on a device that had just been WIPED and logged back in, then HEAL-REVOKE-3 on a device
 FRESHLY MINTED and never revoked at all. So it is not the tab-leadership path TAB-3b exercises - one

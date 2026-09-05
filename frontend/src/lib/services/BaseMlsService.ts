@@ -582,6 +582,87 @@ export abstract class BaseMlsService implements IMlsService {
   private pendingPullInFlight: Promise<void> | null = null;
 
   /**
+   * Settles when every acknowledgement this device has issued has actually reached the server.
+   *
+   * THE MIRROR OF {@link pendingPullInFlight}, closing the same overlap from the other side.
+   * WP-DUPDELIVERY-1 deleted the one where a PULL raced the archive replay; this is the one where a
+   * pull races THIS DEVICE'S OWN ACK, and it had no barrier at all because every ack site is
+   * deliberately fire-and-forget - a drain must not wait on an HTTP round trip to finish.
+   *
+   * FIRE-AND-FORGET IS RIGHT; UNANNOUNCED IS NOT. The two are separable, and separating them is the
+   * whole fix: the ack still returns immediately to its caller, and now says so here, so the one
+   * path that must not overtake it can wait.
+   *
+   * THE RACE IS NOT INCIDENTAL - IT IS SCHEDULED. `onDrainEnd` acks the rows it just drained and,
+   * in the SAME TICK, `refetchFramesLeftBehind` starts a pull (`void this.fetchPendingMessages()`)
+   * whenever a Welcome landed. The server has not recorded the ack yet, so it lists those rows
+   * again and the device meets its own frames a second time - `[QUEUE] delivery ... arrived twice -
+   * the pull listed a row this device had already acknowledged`. Measured on four campaign rows
+   * before it was fixed, and the population is what named it: it appears on TAB-3b, HEAL-REVOKE-2,
+   * -3, -9 and HEAL-NEW-3, all of them a client with an EMPTY store draining a backlog - the state
+   * with the most rows in flight to race - and NOT on HEAL-NEW-1, whose store is equally empty and
+   * which has nobody online to deliver anything.
+   *
+   * CHAINED, NOT REPLACED. Acks are serialised behind one another so a second never overtakes a
+   * first, which is what makes awaiting this a statement about ALL of them rather than the latest.
+   *
+   * AND CHAINING RATHER THAN `allSettled` CLOSES A SECOND, LATENT LOSS in the persisted-ack store.
+   * `ackMessagesWithRetry` READS the ids a failed attempt left in sessionStorage, merges them into
+   * its own payload, and CLEARS the store on success - a read-modify-write with no lock. Two acks in
+   * flight together can interleave it: A exhausts its retries and persists `{x, a}`, B succeeds a
+   * moment later and clears the store, and `a` - which only ever travelled in the request that
+   * failed - is now acknowledged nowhere and remembered nowhere. Serialising the requests serialises
+   * that read-modify-write with them, so the cheaper `allSettled` would have kept the ordering and
+   * kept the bug.
+   * It never rejects: a caller wanting the ORDERING must not be handed a transport failure to
+   * swallow, and a FAILED ack is not a defect here - the server really does still hold those rows,
+   * so a pull that lists them again is telling the truth and the log line is honest.
+   */
+  private ackInFlight: Promise<void> | null = null;
+
+  /**
+   * Acknowledges message ids and announces the request, so a pull can refuse to overtake it.
+   *
+   * Every ack in this class goes through here. Callers keep `void`-ing it - the drain must not wait
+   * on a round trip - and the ordering is recovered by {@link fetchPendingMessages} awaiting
+   * {@link ackInFlight} instead.
+   *
+   * @param messageIds the ids to acknowledge; EMPTY is meaningful - `ackMessagesWithRetry` merges
+   *   the ids persisted by a failed earlier attempt, so an empty call is the flush of those.
+   */
+  private announceAck(messageIds: string[]): Promise<void> {
+    const previous = this.ackInFlight;
+    // WHOSE IDS THESE ARE, CAPTURED WHEN THEY ARE HANDED OVER RATHER THAN WHEN THEY ARE SENT.
+    // `MlsDeliveryApi.ackMessages` reads `userId`/`deviceId` and mints its auth header at CALL time,
+    // which is now inside a continuation that may run several seconds later - and acknowledging one
+    // account's message ids under another's identity is precisely what `clearPersistedPendingAcks`
+    // exists to prevent on logout. Chaining must not widen that window, so the chain checks.
+    const issuedFor = this.userId;
+    const sent = (async () => {
+      await previous?.catch(() => {});
+      if (this.userId !== issuedFor) {
+        // NOT SILENT. Nothing is lost here - the server still holds these rows and the next pull
+        // for the account that owns them lists them again - but a queue drained under one identity
+        // and acknowledged under none is worth a line, and its RATE is the reading that matters.
+        console.warn(
+          `[ACK] ${messageIds.length} id(s) dropped: they were queued for ${issuedFor} and this` +
+            ` service is now ${this.userId}. The rows stay on the server for that account's next pull`
+        );
+        return;
+      }
+      await this.delivery.ackMessages(messageIds);
+    })();
+    const settled = sent.catch(() => {});
+    this.ackInFlight = settled;
+    // Cleared only if nothing has chained behind it, so the chain cannot grow without end and a
+    // later pull does not await an ack that landed minutes ago.
+    void settled.then(() => {
+      if (this.ackInFlight === settled) this.ackInFlight = null;
+    });
+    return sent;
+  }
+
+  /**
    * True while the LAST pull ran to completion - every page fetched, no transport failure.
    *
    * It is what lets {@link waitForMessageQueueIdle} state emptiness instead of idleness. Read
@@ -1063,9 +1144,9 @@ export abstract class BaseMlsService implements IMlsService {
       console.log(`${line}. Further ones of this shape are counted, not printed`);
     }
     if (known === 'done') {
-      void this.delivery
-        .ackMessages([queuedMessageId])
-        .catch((e) => console.warn('[ACK] re-ack of a repeated delivery failed:', e));
+      void this.announceAck([queuedMessageId]).catch((e) =>
+        console.warn('[ACK] re-ack of a repeated delivery failed:', e)
+      );
     }
     return false;
   }
@@ -1303,9 +1384,9 @@ export abstract class BaseMlsService implements IMlsService {
         onDrainEnd: async () => {
           if (ackIds.length > 0) {
             logMlsMetric({ kind: 'queue_ack', platform: this.platform, count: ackIds.length });
-            void this.delivery
-              .ackMessages(ackIds)
-              .catch((e) => console.warn('[ACK] drain ack failed:', e));
+            // ANNOUNCED, still not awaited: the drain must not block on a round trip, and the
+            // pull `refetchFramesLeftBehind` starts a few lines below must not overtake it.
+            void this.announceAck(ackIds).catch((e) => console.warn('[ACK] drain ack failed:', e));
           }
 
           // A Welcome landing is the proof that frames buffered for an unknown group can now be
@@ -1349,7 +1430,12 @@ export abstract class BaseMlsService implements IMlsService {
     // this one has not started. A pull that dies half-way therefore leaves it false.
     this.mailboxEmptiedByAPull = false;
 
-    void this.delivery.ackMessages([]).catch(() => {});
+    // A PULL MUST NOT RACE THIS DEVICE'S OWN ACKNOWLEDGEMENT, and this line used to start one that
+    // did: `void`, so the flush of any persisted ack was still in the air when the server answered,
+    // and so was the drain's ack when `refetchFramesLeftBehind` called straight back in here.
+    // Awaiting it is an ORDERING, not a timeout - it resolves the moment the acks land, or once
+    // their retries are exhausted, and in that second case the rows really are still owed.
+    await this.announceAck([]).catch(() => {});
 
     let fetched = 0;
 
