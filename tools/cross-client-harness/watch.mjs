@@ -1960,6 +1960,95 @@ export const MINT_REFUSALS = [{ path: /^\/api\/auth\/refresh(\?|$)/, status: [40
  * matched NOTHING, so a dry needle in this list says the callback took a path it usually does not -
  * which is worth seeing, and is destroyed by a list trimmed to what one run happened to emit.
  */
+/**
+ * THE IDENTITY PROVIDER'S OWN CONSOLE, which is not this application's and never was.
+ *
+ * `login.mjs` drives the real login, so the observed TAB navigates to Authentik and back - and a
+ * console observer follows the tab, not the origin. Everything Authentik's own front end says while
+ * it renders its password stage therefore lands in this rig's `unexplained` bucket, attributed to
+ * Canari. HEAL-REVOKE-9 collected ten such lines on its first run, and every row that logs in
+ * collects them: it is not that row's noise, it is the shape of the instrument.
+ *
+ * NAMED RATHER THAN PATTERN-MATCHED ON "authentik", because a needle wide enough to cover a foreign
+ * application is a needle wide enough to cover ours the day a message of ours mentions it. These are
+ * the sentences that IdP prints, and `ignoringExpectedLog` reports any that stop matching.
+ *
+ * THIS IS A DISPOSITION AND NOT THE FIX. The fix is to attribute a console line to the ORIGIN that
+ * emitted it and classify anything that is not `SITE` (or `tauri.localhost`) as foreign - the phone
+ * report already has exactly that idea for other Android apps, and the browser report has no notion
+ * of it at all. That change rewrites the classifier every runner shares, so it ages a large part of
+ * the ledger and belongs between rungs. Filed in `backlog.md`.
+ */
+/**
+ * WHAT A DEVICE HOLDING NO MLS STATE SAYS WHILE IT BUILDS ONE - true of a WIPED device and of a
+ * FRESH MINT alike, which is the whole reason this list is separate from both.
+ *
+ * IT WAS FILED UNDER THE WRONG NAME FOR ONE RUN. Both needles were written against HEAL-REVOKE-2,
+ * where the observer was a device that had just been revoked, and they went into
+ * `REVOKED_RETURN_NARRATION` on that reading. HEAL-REVOKE-3 mints a REFERENCE device minutes later
+ * and produced every one of them again, on a client that has never been revoked - so the shared
+ * cause is not revocation, it is an empty store. A disposition filed under a cause it does not have
+ * is a disposition that will be missing on the next observer that needs it, and this is what that
+ * looks like: five unexplained lines on a device doing exactly the right thing.
+ *
+ * - `[PENDING] Group ... absent locally -> recovery requested`. The device is a member of a group
+ *   with another device still waiting to be added, and cannot perform the Add because it holds no
+ *   MLS state for that group. `actions.ts` names the branch in as many words - *"after a recovery
+ *   forgetGroup, the conversation stays active but the group has left WASM: calling addMember would
+ *   loop on `Group not found`"* - so asking for re-admission IS the mechanism, not a fallback around
+ *   one. A finding anywhere a device is supposed to already hold what it is being asked to serve.
+ * - `[GRAINE] community ...: the local group is stale, rejoining`. The device holds a community's
+ *   key-distribution group the server lists no row for it in. On a device with no state that is the
+ *   external join arriving before the roster does, and rejoining is the repair.
+ *
+ * NEITHER FAILURE SIBLING IS HERE. `[PENDING] Group ... recovery request failed:` has a different
+ * spelling and is in no list, so the outcome this seam exists to produce can still break `clean`.
+ */
+export const NO_LOCAL_STATE_NARRATION = [
+  /^\[PENDING\] Group [0-9a-f]{8}… absent locally -> recovery requested$/,
+  /^\[GRAINE\] community [0-9a-f]{8}: this device holds the distribution group but the group holds NO row for it \(\d+ device\(s\) for this user\) - the local group is stale, rejoining$/,
+];
+
+/**
+ * WHAT A DEVICE THAT WAS REVOKED SAYS WHILE IT COMES BACK - the HEAL-REVOKE rung's own subject.
+ *
+ * Every line here is a revoked device behaving correctly, and each is a finding anywhere else:
+ *
+ * - the login refusing with `device_revoked`, which is the row's premise. It is deliberately still
+ *   `console.error` in the product (see `isExpectedLoginOutcome`, which exempts it): that path WIPES
+ *   local state, and an erasure deserves a line that accuses. So the product is right to shout and
+ *   this rung is right to expect it, which is exactly what a per-row disposition is for.
+ * - the in-app diary's echo of the same sentence.
+ * - the two refresh lines: a revoked device's cookie IS dead, and the platform saying it will not
+ *   ask again is the credential latch working rather than a session being lost.
+ *
+ * TWO NEEDLES THAT LIVED HERE FOR ONE RUN ARE NOW IN `NO_LOCAL_STATE_NARRATION`, and the correction
+ * is worth more than the lines. They were written against HEAL-REVOKE-2 as things a REVOKED device
+ * says; HEAL-REVOKE-3 mints a reference device minutes later and produced all of them again, on a
+ * client that has never been revoked in its life. They were never about revocation - they are about
+ * holding NO MLS STATE, which a wiped device and a fresh mint are equally.
+ *
+ * NOT NAMED HERE, DELIBERATELY: `[QUEUE] delivery ... arrived twice`. That is a real defect with its
+ * own backlog entry, it also dirties TAB-3b, and forgiving it on this rung would hide the one thing
+ * in this window that is not the row's subject. A row that stays `PASS-DIRTY` on a filed defect is
+ * reporting honestly; a row made clean by widening a needle is not.
+ */
+export const REVOKED_RETURN_NARRATION = [
+  /^\[INIT\] Login failed \(device_revoked\):/,
+  /^Error: Cet appareil a .* r.voqu.\./,
+  /^\[platform\] PIN prompt declined - refresh credential already proven dead\.$/,
+  /^\[A\] refresh.latched \(cookie already proven dead - not asking again\)$/,
+  /^\[LOGIN\] Attempt starting, checking client version\.$/,
+];
+
+export const IDP_CONSOLE_NARRATION = [
+  /^authentik\(early\): version \S+$/,
+  /^%c\[(DEBUG|INFO|WARN)\]%c \((controller\/locale|ws|api\/[^)]+|flow\/[^)]+)\):%c/,
+  /^authentik\/stages\/\w+: (started|cleared) focus observer$/,
+  /^authentik\/stages\/redirect: redirecting to url from server \S+$/,
+  /^Skipping focus, (target is not visible \S+|no target ?)$/,
+];
+
 export const OIDC_LOGIN_NARRATION = [
   /^\[auth\] handleOidcCallback isDesktop: (true|false)$/,
   /^\[auth\] savedState present: true matches: true$/,

@@ -1694,6 +1694,253 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
+### P1 - a device that joins a group ends up permanently short of the messages sent just before it arrived: the responder gives up seven seconds before the answer comes, and the one retry that would have saved it is swallowed by a coalescing window (measured on the local estate 2026-09-05, eight reproductions and ONE CONTROL THAT PASSED)
+
+**HEAL-REVOKE-5 found it on the first run that ever sent a message.** The runner's own docstring had
+claimed for a week that the world it moves while the device is away is made of *"a group created, a
+group deleted, and messages sent"*; the code moved MEMBERSHIP only. Adding the message half took one
+run to fail.
+
+**THE MEASUREMENT, IDENTICAL IN SEVEN RUNS AND ON TWO DIFFERENT ROWS** - HEAL-REVOKE-5 six times and HEAL-REVOKE-8 once, the latter with every one of its own assertions green. W1 creates a group while the victim is revoked, says
+three marked things in it, and the victim then comes back:
+
+| | messages seen | time |
+| --- | --- | --- |
+| the returned device | **0 of 3** | after waiting **60 s** |
+| a reference device minted ~90 s later, same profile, same group | **3 of 3** | already there, **2 ms** |
+
+**IT IS NOT THE INSTRUMENT, AND THREE SEPARATE THINGS SAY SO.** Both devices are given the same
+budget and the wait ends the instant the target is reached, so the reference's 2 ms and the returned
+device's 60 s are the same question asked with the same patience. A RELOAD on the returned device -
+which rebuilds the view from the store - still shows 0, so this is not a conversation failing to
+re-render something it holds. And the first version of the probe DID manufacture a false asymmetry
+by reading the two devices half a minute apart; that was found and removed before any of this was
+believed, which is why the budget is equal now.
+
+**IT IS NOT FORWARD SECRECY EITHER, WHICH IS THE FIRST THING TO RULE OUT.** A device that joins at
+epoch N cannot read epoch N-1, and that would blind BOTH devices equally - the assertion is an
+EQUALITY for exactly that reason. Both joined after the messages were sent. One got them.
+
+**BOTH DEVICES TAKE THE SAME PATH, VERBATIM.** Neither is added by a member; both let themselves in:
+
+    [READD] 968a2339... roster seat with NO queued Welcome and NO add in flight - nobody owes us
+            anything; serving ourselves
+    [READD] 968a2339... externalJoin -> joined
+    [HISTORY_STATE] Sent for 968a2339... - 00000000..., from 2026-06-07T00:00:00.000Z
+    [HISTORY_RECONCILE] asked 968a2339... whether we hold the same history
+
+Same path, same state key, same window. `recovery.ts` calls `reconcileGroup` right after an external
+join precisely because *"an external join lands at the current epoch WITHOUT the pre-join history,
+which only a member can re-encrypt"* - so the mechanism is there and both devices used it.
+
+**THE DIFFERENCE IS ENTIRELY ON THE ANSWERING SIDE, AND IT IS A SILENCE.** W1's console:
+
+| when (local) | what W1 did |
+| --- | --- |
+| 21:49:50 | said the three things - they are in its own store |
+| 21:49:56 | `[HISTORY_STATE] From ... for 968a2339...` - **received the returning device's key, and nothing more** |
+| 21:51:21 | received the reference's key, `Keys differ`, asked it to describe itself |
+| 21:51:25 | `[HISTORY_BUNDLE] Chunk 1/1 - 3 msg`, `Diff sent: 3 of 3 requested` |
+
+**Six seconds after storing three messages of its own, W1 answered nothing at all.** Not
+`same state as ... - nothing to do`, not `no probe from ... - nothing to answer`, not `store
+unreadable - staying silent`: `handleHistoryRequest` writes a line on every branch it can take, and
+none of them is in the window. **The comparison never ran.** Ninety seconds later the identical ask
+from an identical device ran it and worked.
+
+**THE CAUSE, AND IT IS A RACE BETWEEN TWO CLOCKS ON TWO DIFFERENT DEVICES.** The sixth run caught
+the whole exchange, second by second, with the phone deliberately taken off the socket so only W1
+could be elected:
+
+| when | who | what |
+| --- | --- | --- |
+| 21:59:14 | returning device | external join, then `[HISTORY_STATE] Sent`, `asked ... whether we hold the same history` |
+| 21:59:14 | **W1** | `Keys differ for b88db381... - asked <returning device> to describe` |
+| ... | returning device | **silence for 67 seconds**, while it externally joins the other nineteen groups |
+| **22:00:14** | **W1** | **`asked ... to describe itself, no digest came`** - it gives up |
+| 22:00:21 | returning device | `holds something different - describing our store` |
+| 22:00:22 | returning device | `[HISTORY_DIGEST] Sent` - **seven seconds too late** |
+| 22:00:38 | reference device | the same exchange, digest in the SAME SECOND, `3 of 3 requested message(s)` sent |
+
+**Both halves are individually reasonable and their assumptions do not meet.** The responder waits
+`HISTORY_PROBE_WAIT_MS`, which is `DIGEST_TTL_MS` = **60 s**. The asker answers a digest request only
+`answerAfterMailboxDrained`, deliberately - *"a digest computed while this device is still applying
+its own queue describes a store it is in the middle of completing"*. **A device that has just come
+back is applying twenty external joins**, so its queue takes longer to drain than the responder is
+willing to wait. The reference wins because it happens to ask when its own queue is already quiet.
+
+**AND NOTHING RETRIES - BUT NOT FOR THE REASON FIRST WRITTEN HERE.** The first version of this
+entry said a late joiner holds no unreadable frame and so never raises the reconciler's other
+trigger. **That is false, and HEAL-REVOKE-7 measured it false.** The server hands a joining device
+the group's queued frames, it cannot read any of them, and it says so out loud six seconds after the
+join:
+
+    [22:11:09] [HISTORY_RECONCILE] asked fc1cb0bc... whether we hold the same history
+    [22:11:15] [HISTORY] fc1cb0bc... holds 4 frame(s) it can never read - reconciling
+    [22:12:09] [HISTORY_REQ] fc1cb0bc... asked <the returning device> to describe itself, no digest came
+
+**The trigger fires. The ask never leaves.** `reconcileGroup` returns at `if (recentlyAsked(groupId,
+now)) return false` - `PROBE_COALESCE_MS` is 30 s and the join's own ask was 6 s ago - and it returns
+there SILENTLY, after the caller has already printed the word *reconciling*. So the one line a reader
+would trust is the one that is not true.
+
+**THE COALESCING WINDOW IS SOUND ONLY UNDER AN ASSUMPTION THAT IS FALSE HERE**, and the code states
+the assumption itself: being wrong about it costs *"one repair deferred to the next edge, and the
+next connection re-asks unconditionally either way"*. The next connection edge is the next time this
+device reconnects - which for a session that simply stays up is never. The trigger's evidence is
+spent by then (the frame is acked and gone), so the deferral is permanent. The conversation settles,
+shows READY, shows `amber: []`, and is short three messages for ever, with nothing anywhere saying
+so.
+
+**THE ORDER PAIR IS THE CONTROLLED EXPERIMENT, AND IT ISOLATES THE VARIABLE TO ONE NUMBER.**
+HEAL-REVOKE-7 runs the same runner twice with one difference - whether anybody is online at the
+moment the device returns - and the two runs disagree on the final state, which is why the pair is a
+`FAIL`:
+
+| | first ask | the frame trigger | gap between them | second ask | messages |
+| --- | --- | --- | --- | --- | --- |
+| `--order last` (world online) | 22:11:09, at the join | 22:11:15 | **6 s - inside the 30 s window** | never | **0 of 3, for ever** |
+| `--order first` (world offline, lifted later) | 22:14:18, at the join, answered by nobody | 22:15:00 | **42 s - outside it** | 22:15:00, answered | **3 of 3 in 3.5 s** |
+
+**The run that had NOBODY to answer its first ask is the run that ends up complete.** Its first ask
+was wasted, so its retry fell outside the coalescing window; by the time the retry went out its own
+mailbox had drained, the digest went out in two seconds, `history_bundle` landed, and the device is
+whole. The run that had a responder available immediately is the one that loses the messages
+permanently. **The failure needs the two clocks AND the swallowed retry: fix either and this
+measurement passes.**
+
+**THIS IS ALSO WHAT HEAL-repair IS BLOCKED ON.** That row is `PARTIAL` - 7 of 14 reached the peer -
+and the open question written beside it is the string `no digest came`. It is the same line, from
+the same branch, for the same reason. **One cause, two rows**, and the second one has been open since
+2026-09-05 morning with no mechanism proposed.
+
+**TWO HYPOTHESES WERE MEASURED AND KILLED FIRST**, which is why the one above is stated plainly.
+*The server elected a device that was not there*: the election reads `user:online:<user>:<device>`
+before forwarding and skips anything else, so it cannot. *The elected member was the phone, online
+but frozen*: the phone IS a member of that group and WAS online, and the Android was measured
+`Awake`, `mState=ACTIVE`, Canari the top resumed activity - not frozen - and the failure reproduced
+identically with the phone force-stopped and off the socket entirely.
+
+**IT IS THE USER'S OWN REPORTED SYMPTOM CLASS**, and it is worth reading beside the P1 about twelve
+dropped messages: *"j'ai l'impression de n'avoir qu'une petite partie des messages qu'il m'envoie"*.
+A conversation that is READY and incomplete is indistinguishable, to its owner, from one that is
+complete.
+
+**WHAT THE FIX HAS TO SATISFY, and a deadline is not it** ([durable-rules](durable-rules.md):
+*termination comes from a proof, never from a clock*). Raising the 60 s buys the next slower boot
+nothing, and neither does shortening the coalescing window - both are the same mistake twice.
+
+**The responder's half is the one that can be made event-driven, and the shape is already in this
+file.** `history_pull` is answered on ARRIVAL, addressed, with no rendezvous and no TTL, and it
+terminates because a bundle asks for nothing. The second leg of the state exchange is the only one
+that needs a live waiter, and it needs it for nothing: the digest carries the manifest and the
+window, our own store carries the rest, so **a digest that arrives for a solicitation we issued is
+answerable whenever it arrives**. The 60 s then bounds MEMORY, which is what a TTL is for, instead
+of bounding CORRECTNESS, which is what it is doing now.
+
+**The asker's half is the retry, and it must not be a timer either.** A trigger that is coalesced is
+being told *an ask already in flight will cover you* - so the honest form is to REMEMBER it and let
+the in-flight ask's window close into a real second ask, rather than to drop it and hope a
+reconnection comes. And the silent `return false` has to say something: a line reading *reconciling*
+followed by nothing is worse than no line at all.
+
+**AND THE RE-RUN FOUND A SECOND CAUSE WITH THE SAME SYMPTOM, WHICH IS WHY THE FIRST FIX DID NOT
+CLOSE THE ROW.** On the build carrying it, HEAL-REVOKE-7 `--order last` failed identically - and the
+SERVER's log named the difference:
+
+    22:41:50  FORWARDED target=<the phone>  requester=<the returning device>   - silence
+    22:41:56  the returning device holds 4 frames it cannot read - swallowed, 6 s into 30
+    22:43:15  FORWARDED target=<the phone>  requester=<a reference device>     - silence
+    22:43:20  FORWARDED target=<W1>         requester=<a reference device>     - 3 of 3 sent
+
+**The election is RANDOM by design**, and `notifyHistoryRequest` says why: a backgrounded Android
+holds its socket open, so `user:online` is true while the app cannot process the frame, and
+randomising *"lets those retries rotate past a frozen peer to a genuinely reachable one"*. **There
+were no retries.** The reference device is whole because it asked twice - a fresh enrolment joins
+each group, which clears the coalescing note - while the returning device re-joined a group it
+already held (`already in WASM - skip`), kept the note, and asked once. Two defects, one symptom:
+the responder that answers TOO LATE, and the responder that answers NOTHING.
+
+**Both are fixed.** The second by `escalateReconciliation`: a trigger that can prove incompleteness -
+a frame this device holds and cannot read - excludes the member the in-flight ask reached and elects
+another, terminating on the server's own `no_peer_online` + `excludedOnline` proof, one member per
+step, bounded by membership.
+
+**WHAT REMAINS OPEN IS THE REASON THE ESCALATION HAS TO BE GATED ON EVIDENCE: silence means both
+*we agree* and *nobody answered*.** They are the same observation, so a device with no local proof of
+a gap cannot tell a healthy responder from a frozen one. Making the agreeing responder ack would cost
+one frame per group per ask, which is the whole saving the state key exists for - so it is a design
+question rather than an oversight, and it is written here rather than improvised.
+
+**FIXED THE SAME DAY, AND THE ROW IT WAS FOUND ON IS WHAT VERIFIES IT.** Both halves shipped
+together: `answerHistoryDigest` is a function rather than a continuation inside the wait, and
+`systemMessageHandler` calls it when a digest arrives for a solicitation this device issued and no
+waiter took - addressed by `takeDigestSolicitation`, so the leg stays two-party and the election
+still elects exactly one responder. The 60 s now bounds MEMORY. The coalesced swallow is logged
+instead of silent, so `history.ts`'s *reconciling* line can no longer stand for something that did
+not happen. Nine tests, three files. **What is left is the measurement**: HEAL-REVOKE-7 `--order
+last` and HEAL-REVOKE-5 re-run on a build carrying it, and HEAL-repair, which was `PARTIAL` on the
+same string.
+
+**The instrument is in and the next measurement is a re-run, not an investigation.** The runner
+records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
+its id.
+
+### P2 - the history repair is correct now and takes THREE MINUTES, because a digest waits for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
+
+**The loss is fixed and what is left is a duration.** HEAL-REVOKE-7 `--order last`, on the build
+carrying all three fixes:
+
+    23:47:34  W1 asks the returning device to describe its store for 31101692
+    23:50:43  the returning device answers - THREE MINUTES AND NINE SECONDS later
+    23:50:43  W1 sends the diff, 3 of 3, immediately
+
+Nothing is lost: the same run's reference device answered in **three seconds**, and the returning
+device does get its messages - after 189 s. The row's budget had to be raised twice in one evening,
+60 s to 180 s to 300 s, chasing a mechanism that works and is slow.
+
+**THE BARRIER IS GLOBAL WHERE THE QUESTION IS PER-GROUP.** `answerAfterMailboxDrained` waits on
+`waitForMessageQueueIdle`, which is idle only when the device has applied EVERYTHING - and a device
+that has just rejoined is applying twenty-nine external joins plus every frame queued behind them.
+The reason the barrier exists is sound and is written beside it: *"a digest computed while this
+device is still applying its own queue describes a store it is in the middle of completing"*. That
+is a claim about the frames of THE GROUP BEING DESCRIBED. Frames for twenty-eight other
+conversations cannot change this group's manifest, and waiting for them is a cost with no
+correctness behind it.
+
+**What the fix needs**: a barrier scoped to a group. `waitForMessageQueueIdle(reason, groupId)`
+already takes a group id, but it means *"the group whose catch-up session I am INSIDE"* - a
+different question, and passing this group there would claim a nesting that does not exist (the
+paragraph in `reconcileGroup` explains what that cost the last time). So this is a new capability on
+the queue, not a new argument: *are there frames pending for THIS group*.
+
+**Until then the cost is visible rather than hidden**: `reachedInMs` is recorded on every reading,
+and a repair that starts taking longer shows up as a number in the ledger instead of as a row that
+suddenly fails.
+
+### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
+
+`login.mjs` drives the real login, so the observed TAB navigates to Authentik and back - and a
+console observer follows the tab, not the origin. Everything Authentik's front end prints while it
+renders its password stage therefore landed in `unexplained`, attributed to Canari. HEAL-REVOKE-9
+collected ten such lines on its first run, and **every row that logs in collects them**.
+
+The phone report already has the idea: `logcatReport` buckets other Android applications as
+`foreign`, with a count and a tag list rather than an inline dump, precisely because a device writes
+hundreds of lines this rig did not cause. The BROWSER report has no equivalent at all.
+
+**Disposed of for now, not fixed.** `IDP_CONSOLE_NARRATION` names the five sentence shapes and the
+three login dispositions in `healrevoke.mjs` take it - which is a per-row disposition, the campaign's
+own rule, and it works. **The fix is to attribute a console line to the ORIGIN that emitted it** and
+classify anything that is not `SITE` (or `tauri.localhost`) as foreign, at which point no row needs
+the list at all.
+
+**Why it was not done inline**: it rewrites the classifier every runner shares, so it ages a large
+part of the ledger - the same reason the `unlockPin` de-duplication is parked. It belongs between
+rungs. Note that `watch.mjs` was already touched twice on 2026-09-05, so the ledger has been aged
+today regardless; what makes this different is that the earlier edits were ADDITIVE constants and
+this one changes what `clean` means.
+
 ### P3 - the read-receipt half of the visibility fix is unit-tested and OWED a hardware pass, and the probe that would give it needs a different precondition (2026-09-05)
 
 The notification half was verified on the device (shade carries the decrypted text 2 218 ms after
@@ -1775,6 +2022,15 @@ exactly what five cold starts manufacture.
 
 Two things are owed before a fix: whether the thunk is reached at all on these runs, and where the
 duplicate delivery that reaches the decryptor comes from - `[QUEUE] delivery ... arrived twice`
+(**seen four times on 2026-09-05, and the three new ones narrow it**: TAB-3b, then HEAL-REVOKE-9 and
+HEAL-REVOKE-2 on a device that had just been WIPED and logged back in, then HEAL-REVOKE-3 on a device
+FRESHLY MINTED and never revoked at all. So it is not the tab-leadership path TAB-3b exercises - one
+tab reproduces it - and it is not revocation either: **what the three have in common is a client with
+an EMPTY store pulling a backlog it has never acknowledged before**, which is where an ack still in
+flight has the most rows to race. On each of those three rows, once the row's own noise was named, it
+is the ONLY dirt left, so this one line alone holds three cells at `PASS-DIRTY`. **It is deliberately
+forgiven on none of them**: a row made clean by widening a needle is worse than one reporting
+honestly, and a defect costing three cells is easier to justify fixing than one nobody can see)
 recognises one class of duplicate and acknowledges it without decrypting, so this one took a
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
@@ -2984,9 +3240,32 @@ Three separate things, in the order they have to be answered:
    blocked" are two different defects wearing one report, and only the first was known.
 
    **THIS DOES NOT CLOSE THE ENTRY, AND MUST NOT BE READ AS CLOSING IT.** Points 2 and 3 below are
-   untouched by both fixes, and HEAL-REVOKE-1 - the row that asks this entry's own question - is
-   still `pending` with no runner. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build
-   carrying `da0ce2f2`, not the inference that the cause found must have been the cause reported.
+   untouched by both fixes. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build carrying
+   `da0ce2f2`, not the inference that the cause found must have been the cause reported.
+
+   **HEAL-REVOKE-1 RAN ON 2026-09-05 AND THE SYMPTOM DOES NOT REPRODUCE - `PASS`, clean, `unmet: []`
+   on `2862d958`.** A device that held 7 of 7 rows plus a group minted for the row was revoked
+   through the product's own panel; the server recorded the decision in 276 ms and the device left
+   the census 670 ms later; the device's `[RESET]` trail reported the wipe run and finished with no
+   failed step and no `store(s) SURVIVED` line; and the disk, read seconds after the trail, held
+   **0 Canari databases, 0 identity keys, 0 localStorage keys**. **Two independent witnesses, and the
+   row asserts both** - the app can be right about a wipe it did not complete, and a `deleteDatabase`
+   can leave something no log mentions.
+
+   **WHAT THAT DOES AND DOES NOT SETTLE.** It settles the first instant, which is the only one that
+   can be read: a re-enrolment writes `CanariDB_<userId>` back under the same name within seconds, so
+   no later sample separates a store that survived from one that was rebuilt. It does NOT settle
+   points 2 and 3, and it does not settle the RETURN - whether a device that comes back ends where a
+   fresh one ends is HEAL-REVOKE-2 and -3, and those rows have no runner yet. **The entry stays open
+   on them**, not on this half.
+
+   **AND THE FIRST ATTEMPT AT THIS ROW WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S**, which
+   is worth recording because the sentence it wrote read exactly like one: *"the victim could not be
+   brought to an enrolled starting point"*. `newdevice.mjs` spawned `login.mjs` by BARE NAME, so a
+   mint resolved it against the CALLER'S working directory - fine from the harness root, `Module not
+   found` after a `cd archive` - and exited 1 on a stderr the helper discarded. Ninth sighting of that defect and the first one
+   `spawn-selftest.mjs` had been green for; the gate is now an allowlist of resolved forms rather
+   than a ban on one spelling ([durable-rules](durable-rules.md)).
 
    **AND THE PARAGRAPH ABOVE WAS HALF WRONG, CORRECTED BY MEASUREMENT 2026-08-28.** The wipe was
    thorough and the trigger was missing - both true - but the wipe was also **not permanent**, which

@@ -95,6 +95,8 @@ const CLAIM = {
 
 const rows = [];
 const boardState = new Map();
+/** Board rows carrying more cells than the table has columns - see the note at the split below. */
+const strayPipes = [];
 for (const line of readFileSync(BOARD, 'utf8').split('\n')) {
   const m = /^\|\s*([A-Z][A-Z0-9]*-[0-9A-Za-z-]+)\s*\|(.*)$/.exec(line);
   if (!m) continue;
@@ -122,6 +124,17 @@ for (const line of readFileSync(BOARD, 'utf8').split('\n')) {
   // whatever follows it in there.
   const w = /^\*{0,2}`([A-Za-z-]+)[^`]*`/.exec(cell);
   boardState.set(m[1], w ? CLAIM[w[1]] || 'unstated' : 'unstated');
+  // A `|` INSIDE A CELL SPLITS THE ROW, AND NOTHING ELSE HERE CAN SAY SO. Markdown has no way to
+  // carry a bare pipe in a table, so one written into a verdict - quoting a notification shade, say -
+  // silently adds a column: the table renders wrong for a person, and the reader above takes the
+  // fragment after the last pipe as the state. LIFE-2 read `unstated` against a ledger holding
+  // `PASS` for exactly that reason on 2026-09-05, and the message it produced named the wrong
+  // problem - "the board has not recorded it" about a cell that recorded it in full.
+  //
+  // THREE CELLS FOLLOW THE ID EVERYWHERE ON THIS BOARD - what, needs, state - and that is measured
+  // rather than assumed: all 246 rows split to exactly three. A row with more has a stray pipe, and
+  // that is a different fault from an unstated verdict, so it gets its own line.
+  if (cells.length > 3) strayPipes.push(`${m[1]} (${cells.length} cells, expected 3)`);
 }
 const known = new Set(rows);
 
@@ -181,8 +194,25 @@ if (!existsSync(LEDGER)) {
 // THE NEWEST VERDICT PER ROW. Newest rather than best: a row that passed yesterday and failed today
 // is failing, and a tool reporting the pass would be the reason nobody looked.
 const latest = new Map();
+// THE NEWEST VERDICT PER ORDER, for the rows that HAVE orders. A row whose claim is a COMPARISON -
+// HEAL-REVOKE-7 is "does the ORDER of the return change where the device ends up" - cannot be
+// answered by one run, and its two runs land in the ledger as two records under one id. Taking the
+// newest of them names whichever half ran last, so a pair whose halves DISAGREE reads as whatever
+// was measured most recently: the board said `FAIL` and the ledger said `PASS-DIRTY` about the same
+// row, on 2026-09-05, and both were right about their own half. Rows with a single order are
+// untouched by this - the map has one entry and the worst of one is itself.
+const perOrder = new Map();
 const divergent = new Map();
 const diagnostics = new Map();
+
+/** Worst first: a pair is only as good as its weakest half, and that is what the row claims. */
+const VERDICT_RANK = ['INVALID', 'FAIL', 'PARTIAL', 'VACUOUS', 'SKIPPED', 'PASS-DIRTY', 'PASS'];
+const worseOf = (a, b) => {
+  const ia = VERDICT_RANK.indexOf(a);
+  const ib = VERDICT_RANK.indexOf(b);
+  // An unknown verdict sorts worst, deliberately: a name this tool does not know is not a pass.
+  return (ia < 0 ? -1 : ia) <= (ib < 0 ? -1 : ib) ? a : b;
+};
 for (const line of readFileSync(LEDGER, 'utf8').split('\n')) {
   if (!line.trim()) continue;
   let r;
@@ -223,11 +253,63 @@ for (const line of readFileSync(LEDGER, 'utf8').split('\n')) {
         instrumentSha: r.instrumentSha,
       });
     }
+    if (r.order) {
+      if (!perOrder.has(row)) perOrder.set(row, new Map());
+      const byOrder = perOrder.get(row);
+      const seen = byOrder.get(r.order);
+      if (!seen || String(r.at) > String(seen.at)) {
+        byOrder.set(r.order, { verdict: r.verdict, at: r.at, build: r.build });
+      }
+    }
+  }
+}
+
+// THE PAIRS, ADJUDICATED. Only rows that actually ran under more than one order: everything else has
+// one half and is already its own answer.
+const pairs = [];
+for (const [row, byOrder] of perOrder) {
+  if (byOrder.size < 2) continue;
+  const halves = [...byOrder.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const verdict = halves.map(([, h]) => h.verdict).reduce(worseOf);
+  const held = latest.get(row);
+  pairs.push({ row, halves, verdict, was: held?.verdict });
+  if (held) held.verdict = verdict;
+}
+
+if (pairs.length) {
+  console.log(
+    '\n[rows] ' +
+      pairs.length +
+      ' row(s) are a COMPARISON and are adjudicated on ALL their halves, not the newest:'
+  );
+  for (const p of pairs) {
+    console.log(
+      '  ' +
+        p.row.padEnd(14) +
+        p.halves.map(([o, h]) => o + ': ' + h.verdict).join('  ') +
+        '  -> ' +
+        p.verdict +
+        (p.was && p.was !== p.verdict ? '  (newest alone said ' + p.was + ')' : '')
+    );
   }
 }
 
 const never = rows.filter((r) => !latest.has(r));
 console.log('[rows] the board names ' + rows.length + ' rows; ' + latest.size + ' have a verdict in the ledger');
+
+// PRINTED FIRST, BECAUSE IT EXPLAINS EVERY OTHER LINE ABOUT THE ROWS IT NAMES. A row split by a
+// stray pipe reads `unstated` however completely it was written, so a reader who sees only the
+// "board has not recorded it" section below goes looking for a missing verdict that is already
+// in the cell, in full. LIFE-2 did exactly that on 2026-09-05.
+if (strayPipes.length) {
+  console.log(
+    '\n[rows] ' +
+      strayPipes.length +
+      ' board row(s) carry a `|` INSIDE a cell, so the table has extra columns and the state ' +
+      'read below is a fragment - fix the CELL, not the verdict:'
+  );
+  console.log('  ' + strayPipes.join('\n  '));
+}
 
 console.log('\n[rows] per phase - answered / named, then the newest verdicts held');
 for (const phase of new Set(rows.map((r) => r.split('-')[0]))) {

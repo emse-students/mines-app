@@ -396,6 +396,91 @@ The resulting flow, which is today's with one probe in front of it:
 One round trip is added to the case that differs and one whole digest is removed from the case that
 does not - which is the common one, and the only one paid on every connect of every device.
 
+### The fifth trigger: an ask that reached a member which answered nothing
+
+**The election is random on purpose, and the client owed it a second draw.** `notifyHistoryRequest`
+shuffles the members before forwarding, and the comment says why: *"A backgrounded Android holds its
+WebSocket TCP open, so `user:online` can be true while the app cannot process the frame
+(frozen-online). The requester re-solicits on a bounded backoff; randomizing the responder each call
+lets those retries rotate past a frozen peer to a genuinely reachable one."* **The requester did not
+re-solicit.** `reconcileGroup` asks once and the coalescing window swallows everything for 30 s.
+
+Measured 2026-09-05 with the server's log beside both clients, on HEAL-REVOKE-7 `--order last`:
+
+| when | what the SERVER did | what followed |
+| --- | --- | --- |
+| 22:41:50 | `FORWARDED target=<the phone>` for the returning device | silence |
+| 22:41:56 | - | the returning device holds 4 frames it cannot read; swallowed, 6 s into 30 |
+| 22:43:15 | `FORWARDED target=<the phone>` for a reference device | silence |
+| 22:43:20 | `FORWARDED target=<W1>` for the same reference device | `3 of 3 requested message(s)` |
+
+**The reference device is whole because it asked twice**; it asks twice because a fresh enrolment
+joins each group, which clears the coalescing note. The returning device re-joined into a group it
+already held (`already in WASM - skip`), kept the note, and stayed three messages short for ever.
+
+**So a trigger that can PROVE incompleteness escalates rather than defers.** A frame this device
+holds and cannot read is proof of a gap without asking anybody, which means silence from a responder
+has told it nothing - where for every other trigger silence genuinely means *we agree*.
+`escalateReconciliation` adds the member the in-flight ask reached to an excluded set and elects
+again. It terminates on the proof the server already delivers - `no_peer_online` with a positive
+`excludedOnline`, *every reachable member has been asked* - which is the coverage walk's proof
+reused rather than a new one. One member per step, the set only grows, and forty unreadable frames on
+a group with two online members cost two elections and then a fact.
+
+**AND THE EXCLUSION IT WALKS ON HAD NEVER WORKED.** The first run of the escalation asked the
+server nine times to skip the sleeping phone and was handed it back every time. The server filtered
+the exclusion list with `k.length <= 128`, and a member key - `userId:deviceId`, a 64-character hex
+digest plus a device id that repeats it - is **147 characters for a browser and 149 for the phone**.
+Every key was dropped in silence. So the fourth trigger's termination argument, *each step of the
+walk removes exactly one member*, had been inert since it shipped: the walk removed nobody, and the
+client's guard against a server that ignores an exclusion stopped it instead. Fixed with a cap
+measured against a real key, a warning when an exclusion cannot be used, and a test whose fixture is
+the shape this platform issues rather than `ua:da`.
+
+**What is still open is that SILENCE CARRIES TWO MEANINGS.** *We agree* and *nobody answered* are the
+same observation, which is why the escalation has to be gated on local evidence instead of on the
+absence of a reply. Making the agreeing responder ack would cost one frame per group per ask - the
+saving the state key exists for - so it is a design question, not an oversight
+([backlog](../backlog.md)).
+
+### The second leg does not need a live waiter, and requiring one cost three messages for ever
+
+**Measured on the local estate 2026-09-05, by HEAL-REVOKE-5 and then isolated by HEAL-REVOKE-7's
+order pair.** The responder asks *"describe yourself"* and waits `DIGEST_TTL_MS` = 60 s for the
+digest. The asker answers only once its own inbound queue has drained - deliberately, because a
+digest computed mid-drain describes a store still being completed. **A device that has just rejoined
+an account is applying every group's external join at once**: it took 67 s, and its digest reached a
+responder that had stopped listening seven seconds earlier.
+
+| when | who | what |
+| --- | --- | --- |
+| 22:11:09 | the returning device | external join, state key sent, `asked ... whether we hold the same history` |
+| 22:11:09 | the responder | `Keys differ - asked <it> to describe` |
+| 22:11:15 | the returning device | `holds 4 frame(s) it can never read - reconciling` - **and no ask leaves**: `recentlyAsked`, 6 s into a 30 s window |
+| 22:12:09 | the responder | `asked ... to describe itself, no digest came` |
+| 22:12:17 | the returning device | its digest goes out - **eight seconds too late** |
+
+**The order pair is the control.** Run the same row with nobody online at the moment of the return
+and the first ask is answered by no one, so the frame trigger fires 42 s later, OUTSIDE the
+coalescing window, produces a real second ask, and the exchange completes in two seconds: 3 of 3
+messages. The run that HAD a responder available immediately is the one that loses them.
+
+**The repair is that the last leg needs nothing remembered.** The digest carries the manifest and
+the window the asker drew; our store carries the rest. So `answerHistoryDigest` is a function, not a
+continuation inside the wait, and `systemMessageHandler` calls it when a digest arrives for a
+solicitation this device issued and no waiter took. `takeDigestSolicitation` keeps that addressed -
+the leg is a group broadcast, every member records it, and only the device that ASKED holds an
+outstanding solicitation - so the election still elects exactly one responder. The 60 s now bounds
+MEMORY, which is what a TTL is for, instead of bounding CORRECTNESS.
+
+**Two things follow that are worth stating separately.** A wait is not a termination proof: raising
+the 60 s buys the next slower boot nothing, and shortening the coalescing window is the same mistake
+twice. And a trigger swallowed by coalescing is promised that the ask in flight covers it - the
+window's own justification says *"the next connection re-asks unconditionally either way"*, which is
+false for a session that stays up - so the swallow is now LOGGED rather than silent, because
+`history.ts` announces *reconciling* before calling and a silent decline made that line a claim
+about something that did not happen.
+
 ### The fourth trigger: an answer that does not reach far enough back
 
 **SHIPPED 2026-08-16.** The other three triggers are things a device notices about ITSELF - a

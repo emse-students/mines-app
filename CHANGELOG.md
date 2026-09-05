@@ -13,6 +13,53 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **The history election has never been able to skip a member, because the cap on a member key was
+  shorter than every key this platform issues.** `notifyHistoryRequest` filtered the exclusion list
+  with `k.length <= 128`. A member key is `userId:deviceId`, where the user id is a 64-character hex
+  digest and the device id repeats it - **147 characters for a browser, 149 for the phone**, both
+  measured. Every one was dropped, silently. So the exclusion list excluded nobody, and the coverage
+  chase - whose entire termination argument is *"each step of the walk removes exactly one member"* -
+  could not remove one; the client's own guard against a server that ignores an exclusion fired
+  instead and stopped the walk. Found by HEAL-REVOKE-7, which asked the server nine times to skip a
+  sleeping phone and was handed it back every time. The number came from `MAX_HISTORY_EXCLUSIONS`
+  sitting beside it, two limits that look alike and count different things. **No test could have
+  caught it**: every fixture in the spec uses `ua:da`, and a fixture shorter than every real value
+  cannot fail a length bound - the new one is a real-shaped key that asserts its own length first.
+  An exclusion that cannot be used is now logged rather than dropped in silence.
+
+- **A returning device asked one member for its missing history, that member was a frozen phone, and
+  nothing ever asked anybody else.** The delivery service elects a RANDOM online member to answer a
+  history solicitation, and says why in its own comment: a backgrounded Android holds its WebSocket
+  open, so `user:online` is true while the app cannot process the frame, and randomising *"lets those
+  retries rotate past a frozen peer to a genuinely reachable one"*. **There were no retries.**
+  Measured with the server log beside both clients: the returning device was forwarded to the phone
+  and heard nothing; six seconds later it noticed it held four frames it could not read, and that
+  trigger was swallowed by the 30 s coalescing window; a reference device minted ninety seconds later
+  was ALSO forwarded to the phone, heard nothing, asked a second time, drew W1, and had all three
+  messages one second later. The reference is whole because it asked twice. A trigger that carries
+  proof of incompleteness - a frame this device holds and cannot read - now ESCALATES instead of
+  deferring: it excludes the member the in-flight ask reached and elects another. It terminates on
+  the proof the server already delivers (`no_peer_online` with a positive `excludedOnline`, meaning
+  every reachable member has been asked), adds exactly one member per step, and is bounded by
+  membership rather than by a clock - a burst of forty unreadable frames on a group with two online
+  members costs two elections and then a fact.
+
+- **A device that rejoined a busy account stayed three messages short of a conversation, for ever.**
+  The last leg of a history reconciliation asks the peer to describe its store and waits 60 s; the
+  peer answers only once its own inbound queue has drained, and a device that has just come back is
+  applying every group's external join at once. Measured on the local estate: **67 s to drain against
+  the 60 s wait**, the digest arriving seven seconds after the responder logged `no digest came`,
+  recorded by a rendezvous nobody was listening to any more, and dropped. The conversation then reads
+  READY, reports nothing amber, and is simply incomplete. Nothing retried it: the one trigger that
+  would have - `holds N frame(s) it can never read` - fired six seconds after the join and was
+  swallowed by the 30 s coalescing window, whose written justification is that *the next connection
+  re-asks unconditionally*, which is false for a session that stays up. **The order pair of
+  HEAL-REVOKE-7 is the control**: the same run with nobody online to answer the first ask ends up
+  COMPLETE, because its retry fell outside the window. Answering a digest needs nothing remembered -
+  it carries the manifest and the window, the store carries the rest - so it is now answered wherever
+  it lands, addressed by an outstanding solicitation so the election still elects one responder. The
+  60 s bounds memory instead of correctness, and the coalesced swallow is logged rather than silent.
+
 - **A phone in a pocket told the sender their message had been read.** The read watermark is raised
   when the window is focused and the tab visible - and in a backgrounded Android WebView BOTH are
   permanently true, so a phone sitting in a pocket with a conversation selected kept marking

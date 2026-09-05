@@ -22,7 +22,7 @@ import { parseServerTimestampMs } from '$lib/mls-client/incomingDelivery';
 import { frameFingerprint } from '$lib/mls-client/inboundFrameLedger';
 import { classifyIncomingDecryptError } from '$lib/mls-client/mlsDecryptError';
 import { markEpochGap } from '$lib/utils/chat/epochGapRegistry';
-import { reconcileGroup } from '$lib/utils/chat/historyReconcile';
+import { escalateReconciliation } from '$lib/utils/chat/historyReconcile';
 import { readStoredTimestampMs, toValidDate } from '$lib/utils/dates';
 import { normalizeMessageId } from '$lib/utils/chat/messageUtils';
 import { yieldToMainThread } from '$lib/utils/scheduling/yieldToMainThread';
@@ -1138,7 +1138,11 @@ export async function replayConversationHistory(params: {
       log(
         `[HISTORY] ${id.slice(0, 8)}… holds ${unreadableFrames} frame(s) it can never read - reconciling${sample}`
       );
-      void reconcileGroup(mlsService, id, log);
+      // ESCALATES rather than asks, because this trigger carries its own evidence: a frame this
+      // device holds and cannot read is proof the store is incomplete for this group, whatever any
+      // peer says. So an ask already in flight is not something to defer to - if it reached a member
+      // that is answering nothing, the walk moves to the next one. See `escalateReconciliation`.
+      void escalateReconciliation(mlsService, id, log);
     }
   }
 }

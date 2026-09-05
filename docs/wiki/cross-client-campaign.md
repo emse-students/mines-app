@@ -903,6 +903,31 @@ What each of the four is for:
   is green. Its `pending` half is discriminated by PRESENCE: a switched-off device is legitimately
   pending, so those rows are reported as `notCountedAgainstTheProduct` rather than counted.
 
+  **AND THAT PRESENCE PREDICATE WAS MEASURED AGAINST THE POPULATION IT WILL RUN ON, 2026-09-05,
+  BEFORE THE RUNNER WAS WRITTEN - IT REPORTS ZERO.** The local estate holds **73 pending memberships
+  across 42 devices**, the oldest 37 days, and every one of them names a group that still EXISTS and
+  a device that is still ENROLLED - so none is debris by any structural test. Three devices were
+  online at the time of the reading and **not one of them carried a single pending row**. A row
+  asserting "no pending membership past the budget, for a device that is present" would therefore
+  have recorded a `PASS` about nothing at all, on a table holding 73 rows of exactly the shape it
+  exists to find. That is the rule this campaign already carries - *a predicate that named the last
+  incident is not the predicate that names the next one; re-measure it against the population it
+  will actually run on* - and one `GROUP BY` settled it.
+
+  **What the row must do instead, in three parts.** The **placeholder half is unconditional and
+  needs no discriminator**: `userId` or `deviceId` equal to a non-identity literal is a finding
+  whatever the device is doing, it reads the whole table, and it is currently 0 - which is the guard
+  that shipped, holding. The **pending half must report a CENSUS**, bucketed by age and by whether
+  the device is present, so the 73 are visible rather than silently excluded by a predicate that
+  cannot judge them. And the presence-discriminated assertion must record **whether it was vacuous**:
+  if no online device carried any membership at all, that half is `INCONCLUSIVE`, never `PASS` - a
+  rig that cannot ask its question must say so rather than answer it.
+
+  **Which is also why MULTI-8 comes first.** The controlled case - enrol W3 while the peer is
+  offline, then assert THAT membership reaches `active` within the budget - is the only one where
+  the rig owns both ends, so it is the only one that can be non-vacuous on demand. MULTI-10 is the
+  census over everything else, and it is worth exactly what its buckets say.
+
 ## 16 HEAL - what the rows are, and what they cost
 
 Moved off [the board](cross-client-testing.md) on 2026-08-28: it had grown to 280 lines of prose around 44 lines of table, which is the rule of 2026-08-22 broken in one section - a cell is a verdict, a count and a time. Nothing here is state; it is why each row exists.
@@ -1209,6 +1234,50 @@ The cells carried these as prose; they are design, and the board is a state tabl
   has to be one that heals slowly (row 11's late W1, row 2's peer subset), or the observation has to
   start inside the login, which is a different primitive. The trunk decides which; a third widening of
   the watch would not reach it.
+
+### HEAL-REVOKE-1, 2026-09-05 - the P1 does not reproduce, and the row's first `INVALID` was the rig blaming the product
+
+**The row.** A device the account had just enrolled, holding 7 of 7 rows plus a group minted so the
+wipe would have something real to take, revoked through the product's own device panel. The server
+recorded the decision in 276 ms and the device left the census 670 ms later. The device's own
+`[RESET]` trail reported the wipe run and finished, `0` failed steps, no `store(s) SURVIVED` line.
+The disk, read seconds after the trail so anything still running had time to put state back, held
+**0 Canari databases, 0 identity keys, 0 localStorage keys**. `PASS`, clean, `unmet: []`.
+
+**It asserts two witnesses and not one, deliberately.** The app can be right about a wipe it did not
+complete, and a `deleteDatabase` can leave something no log mentions - those are the two defects this
+entry's backlog history already records, and they wore the same report. So the log claim and the disk
+claim are separate expectations.
+
+**IT STOPS AT THE WIPE, AND THAT IS THE ONLY INSTANT THAT CAN ANSWER ITS QUESTION.** A re-enrolment
+writes `CanariDB_<userId>` back under the same name within seconds of the wipe, so no later sample
+separates a store that survived from one that was rebuilt. Whether a returning device ENDS where a
+fresh one ends is a different claim, and it belongs to HEAL-REVOKE-2 and -3.
+
+**AND THE FIRST RUN WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S.** It wrote *"the victim
+could not be brought to an enrolled starting point, so there is nothing to revoke"* - a sentence that
+reads exactly like a product fault. `newdevice.mjs` spawned `login.mjs` by BARE NAME with no `cwd`,
+so the name resolved against the CALLER'S working directory. **That is what kept it invisible for as
+long as it did**: `bun archive/healnew.mjs` started from the harness root works, `cd archive && bun
+healrevoke.mjs` does not, and the difference is a `cd` no verdict records - so the primitive had a
+history of successful runs while being broken for anyone who entered the directory first. When it
+fails it exits 1 with `Module not found "login.mjs"` on a stderr the helper discarded, and reports
+`login ok=false`.
+
+**NINTH SIGHTING, AND THE FIRST ONE THE GATE HAD BEEN GREEN FOR.** `spawn-selftest.mjs` exists for
+exactly this defect and forbade *a bare string literal in argv*; this site spawns `[script, ...args]`
+out of a two-line helper whose callers write `run("login.mjs", ...)`. **A literal at the call site
+and a variable at the spawn is invisible to a rule about argv.** The gate is now an allowlist of the
+property it was always claiming - the path handed to the runtime must be ABSOLUTE, so
+`requireScript(...)`, `join(...)` and a runtime flag are accepted and everything else, a variable
+included, is rejected - and the old line is kept as a specimen so the shape can never stop being
+seen. Rule in [durable-rules](durable-rules.md).
+
+**One board fault came out of the same session.** LIFE-2's cell quoted a notification shade
+containing a `|`, which markdown reads as a column separator: the table silently grew a column, and
+`rows.mjs` - which takes the LAST cell as the state - reported `board: unstated` against a ledger
+holding `PASS`. The message named the wrong problem, so the reader now checks the cell COUNT (three
+after the id, everywhere, measured across all 246 rows) and says so first.
 
 ### The HEAL rung's first two nights, and the device cap under all of it
 

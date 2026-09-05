@@ -10,6 +10,7 @@ import type { Mock } from 'vitest';
 import {
   answerAfterMailboxDrained,
   reconcileGroup,
+  escalateReconciliation,
   reconcileAllGroups,
   retryDeferredReconciliations,
   deferredReconciliations,
@@ -195,6 +196,118 @@ describe('reconcileGroup', () => {
     expect(deferredGroups()).toEqual([GROUP]);
   });
 
+  describe('escalating past a responder that answers nothing', () => {
+    /**
+     * THE FIFTH TRIGGER. The server elects a RANDOM online member so a retry can rotate past a peer
+     * that is online but frozen; measured 2026-09-05, there was no retry to rotate. A device holding a
+     * frame it cannot read knows its store is incomplete without asking anybody, so an ask in flight
+     * that reached a silent member is something to argue with rather than defer to.
+     */
+    /** A service that elects each of `targets` in turn, as the server's randomisation would. */
+    function rotating(targets: string[]) {
+      let i = 0;
+      return {
+        sendHistoryRequest: vi.fn().mockImplementation(async () => ({
+          target: targets[Math.min(i++, targets.length - 1)],
+        })),
+        waitForMessageQueueIdle: vi.fn().mockResolvedValue(undefined),
+        isDistributionGroup: vi.fn(() => false),
+      } as unknown as Parameters<typeof reconcileGroup>[0] & {
+        sendHistoryRequest: ReturnType<typeof vi.fn>;
+      };
+    }
+
+    it('elects somebody else, excluding the member the ask in flight reached', async () => {
+      const mls = rotating(['u:phone', 'u:w1']);
+      const now = Date.now();
+      expect(await reconcileGroup(mls, GROUP, log, now)).toBe(true);
+
+      expect(await escalateReconciliation(mls, GROUP, log, now + 6_000)).toBe(true);
+
+      expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(2);
+      expect(mls.sendHistoryRequest.mock.calls[1][1]).toEqual({ exclude: ['u:phone'] });
+    });
+
+    it('adds ONE member per step, and the set only grows', async () => {
+      const mls = rotating(['u:phone', 'u:w1', 'u:w2']);
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+      await escalateReconciliation(mls, GROUP, log, now + 6_000);
+
+      expect(await escalateReconciliation(mls, GROUP, log, now + 7_000)).toBe(true);
+
+      expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(3);
+      expect(mls.sendHistoryRequest.mock.calls[2][1]).toEqual({ exclude: ['u:phone', 'u:w1'] });
+    });
+
+    it('stops loudly against a server that ignores the exclusion, and does not walk on it', async () => {
+      // The one shape that would not terminate: a step that re-draws a member already in the set adds
+      // nothing, so the walk stops there rather than looping politely. The guard predates this trigger
+      // and is what bounds it - the walk never gets a second member to exclude.
+      const mls = rotating(['u:phone']);
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+
+      expect(await escalateReconciliation(mls, GROUP, log, now + 6_000)).toBe(false);
+
+      expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(2);
+      expect(log.mock.calls.flat().join(' ')).toContain('which we asked it to skip');
+    });
+
+    it('ends on the proof the SERVER delivers when every reachable member has been asked', async () => {
+      const mls = service({ noPeerOnline: true, excludedOnline: 2 });
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+
+      // No ask is in flight - `no_peer_online` released the window - so this is an ordinary first ask.
+      expect(await escalateReconciliation(mls, GROUP, log, now + 1_000)).toBe(false);
+      expect(log.mock.calls.flat().join(' ')).toContain('every reachable member');
+    });
+
+    it('is an ordinary ask when nothing is in flight', async () => {
+      const mls = service({ target: 'u:w1' });
+
+      expect(await escalateReconciliation(mls, GROUP, log, Date.now())).toBe(true);
+
+      expect(mls.sendHistoryRequest).toHaveBeenCalledWith(GROUP, { exclude: [] });
+    });
+
+    it('waits rather than duplicating when the election has not named anybody yet', async () => {
+      // The election answered without a target - nobody is holding this ask, so escalating past it
+      // would only be the duplicate the coalescing window exists to remove.
+      const mls = service({});
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+
+      expect(await escalateReconciliation(mls, GROUP, log, now + 6_000)).toBe(false);
+      expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts a FRESH walk on the next ordinary ask - a member may have woken up', async () => {
+      const mls = service({ target: 'u:phone' });
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+      await escalateReconciliation(mls, GROUP, log, now + 6_000);
+
+      // Past the window: an ordinary trigger, which begins again from the whole membership.
+      await reconcileGroup(mls, GROUP, log, now + 61_000);
+
+      expect(mls.sendHistoryRequest).toHaveBeenLastCalledWith(GROUP, { exclude: [] });
+    });
+
+    it('forgets the walk with the conversation', async () => {
+      const mls = service({ target: 'u:phone' });
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+      await escalateReconciliation(mls, GROUP, log, now + 6_000);
+      forgetGroupReconciliation(GROUP);
+
+      await reconcileGroup(mls, GROUP, log, now + 7_000);
+
+      expect(mls.sendHistoryRequest).toHaveBeenLastCalledWith(GROUP, { exclude: [] });
+    });
+  });
+
   describe('coalescing', () => {
     it('collapses a burst of triggers on one group into a single ask', async () => {
       // The case that produced it: a replay failing to decrypt forty frames of one conversation
@@ -208,6 +321,21 @@ describe('reconcileGroup', () => {
       expect(probe).toHaveBeenCalledTimes(1);
       // The second and third never even reached the server.
       expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it('SAYS it coalesced - a silent decline made the caller a liar', async () => {
+      // `history.ts` prints "holds N frame(s) it can never read - reconciling" and then calls this.
+      // When the swallow was silent, that line claimed a repair that never happened - which is how
+      // the P1 of 2026-09-05 read as a product that never retries rather than as a trigger swallowed
+      // six seconds after the join it duplicated.
+      const mls = service();
+      const now = Date.now();
+      await reconcileGroup(mls, GROUP, log, now);
+      log.mockClear();
+
+      expect(await reconcileGroup(mls, GROUP, log, now + 1)).toBe(false);
+
+      expect(log.mock.calls.flat().join(' ')).toContain('not asking again');
     });
 
     it('coalesces PER GROUP - a burst on one says nothing about another', async () => {

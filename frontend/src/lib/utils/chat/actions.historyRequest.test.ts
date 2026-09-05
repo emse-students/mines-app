@@ -39,6 +39,7 @@ import {
   digestIdentity,
   noteProbeReceived,
   resetHistoryDigestRendezvousForTests,
+  takeDigestSolicitation,
 } from './historyDigestRendezvous';
 import { historyStateKey, invalidateAllHistoryStateKeys } from './historyStateKey';
 
@@ -267,25 +268,17 @@ describe('handleHistoryRequest - the state key', () => {
     expectSilence();
   });
 
-  it('goes on to the diff when the digest it asked for arrives', async () => {
-    // The second leg of ONE solicitation: the digest lands on the same rendezvous, and the exchange
-    // continues exactly as it would have with a digest sent up front.
+  it('asks for a digest and ENDS - the answer is an event, not a continuation', async () => {
+    // The second leg used to block here for `DIGEST_TTL_MS` and give up. It waits for nothing now:
+    // the digest carries the manifest and the window, so it is answered wherever it lands - see
+    // `systemMessageHandler`'s `history_digest` branch and the solicitation cases below.
     await postKey([rows[0]]);
-    const params = baseParams({ storage: storageWith(rows) });
-    sendHistoryDigestRequest.mockImplementationOnce(async () => {
-      noteProbeReceived(GROUP, REQUESTER, {
-        kind: 'digest',
-        digest: await buildHistoryDigest([rows[0]]),
-        since: 0,
-      });
-    });
 
-    await handleHistoryRequest(params);
+    await handleHistoryRequest(baseParams({ storage: storageWith(rows) }));
 
-    expect(sendHistoryBundleForIds).toHaveBeenCalledWith(GROUP, ['m2'], expect.anything(), {
-      to: REQUESTER,
-      since: 0,
-    });
+    expect(sendHistoryDigestRequest).toHaveBeenCalled();
+    expect(sendHistoryBundleForIds).not.toHaveBeenCalled();
+    expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(true);
   });
 });
 
@@ -451,6 +444,55 @@ describe('handleHistoryRequest - with a digest', () => {
         expect.objectContaining({ since: 0 })
       );
     });
+  });
+});
+
+describe('handleHistoryRequest - the solicitation outlives the wait', () => {
+  /**
+   * THE P1 OF 2026-09-05, PINNED AT ITS SEAM.
+   *
+   * The asker answers a digest request only once its own inbound queue has drained, and a device
+   * that has just rejoined is applying every group's external join at once - measured at 67 s
+   * against this 60 s wait, with the digest arriving seven seconds after it ended. The exchange used
+   * to die there and nothing retried it, so the conversation settled READY and three messages short,
+   * for ever. What makes the late digest answerable is that this device still knows it asked.
+   */
+  it('records an outstanding solicitation, so the digest is answerable whenever it comes', async () => {
+    noteProbeReceived(GROUP, REQUESTER, { kind: 'state', key: 'ffff', since: 0 });
+
+    await handleHistoryRequest(baseParams({ probeWaitMs: 1 }));
+
+    expect(sendHistoryDigestRequest).toHaveBeenCalled();
+    expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(true);
+  });
+
+  it('answers a digest that arrives WITHOUT a state leg inline, and leaves nothing outstanding', async () => {
+    // A device that goes straight to a digest is answered here and now: there was no request of
+    // ours to record, so nothing is left for the late road to find and answer a second time.
+    noteProbeReceived(GROUP, REQUESTER, {
+      kind: 'digest',
+      digest: await buildHistoryDigest([]),
+      since: 0,
+    });
+
+    await handleHistoryRequest(baseParams({ probeWaitMs: 1 }));
+
+    expect(sendHistoryBundleForIds).toHaveBeenCalled();
+    expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(false);
+  });
+
+  it('records nothing when the two stores AGREE - there is no second leg to answer late', async () => {
+    const rows = [{ id: 'm1', timestamp: at('2026-08-01T10:00:00Z') }];
+    noteProbeReceived(GROUP, REQUESTER, {
+      kind: 'state',
+      key: await historyStateKey(rows.map(rowOf), 0),
+      since: 0,
+    });
+
+    await handleHistoryRequest(baseParams({ storage: storageWith(rows) }));
+
+    expect(sendHistoryDigestRequest).not.toHaveBeenCalled();
+    expect(takeDigestSolicitation(GROUP, REQUESTER)).toBe(false);
   });
 });
 

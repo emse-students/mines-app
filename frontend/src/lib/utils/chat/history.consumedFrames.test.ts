@@ -10,10 +10,10 @@
 // Mocked so a case can ASSERT on whether a repair was asked for. Without it the replay's loss path
 // reaches the real one, which is a network call these cases have no business making.
 vi.mock('$lib/utils/chat/historyReconcile', () => ({
-  reconcileGroup: vi.fn().mockResolvedValue(true),
+  escalateReconciliation: vi.fn().mockResolvedValue(true),
 }));
 
-import { reconcileGroup } from '$lib/utils/chat/historyReconcile';
+import { escalateReconciliation } from '$lib/utils/chat/historyReconcile';
 import { frameFingerprint } from '$lib/mls-client/inboundFrameLedger';
 import { createMlsServiceStub } from '$lib/mls-client/test/fixtures/mlsServiceStub';
 import { fromBase64, toBase64 } from '$lib/utils/hex';
@@ -294,7 +294,7 @@ describe('a frame the archive replay consumed', () => {
     });
 
     // No reconciliation was asked for: nothing was lost, so nothing needs repairing.
-    expect(vi.mocked(reconcileGroup)).not.toHaveBeenCalled();
+    expect(vi.mocked(escalateReconciliation)).not.toHaveBeenCalled();
     // And the row is still consumed, or the replay walks it again on every load.
     expect(hasHistoryFrameBeenConsumed(USER, GROUP, row.id)).toBe(true);
   });
@@ -302,7 +302,7 @@ describe('a frame the archive replay consumed', () => {
   /**
    * AND WHEN IT IS A LOSS, THE ASK WAITS FOR THE SESSION TO CLOSE.
    *
-   * `reconcileGroup` opens on the mailbox barrier, and the barrier needs the global MLS mutex that
+   * `escalateReconciliation` opens on the mailbox barrier, and the barrier needs the global MLS mutex that
    * this replay's catch-up holds until `finish` resolves. Raised from inside the walk it is therefore
    * refused outright - the barrier says so and skips - and the ask goes out against a mailbox that
    * was never emptied, which is the one ordering guarantee it carries. `void` does not help: the
@@ -351,12 +351,16 @@ describe('a frame the archive replay consumed', () => {
     // failure, and the case would then pass against the very code it is here to refuse.
     for (let turn = 0; turn < 200 && !finish.mock.calls.length; turn++) await flush();
     expect(finish).toHaveBeenCalled();
-    expect(vi.mocked(reconcileGroup)).not.toHaveBeenCalled();
+    expect(vi.mocked(escalateReconciliation)).not.toHaveBeenCalled();
 
     closeSession();
     await replay;
 
-    expect(vi.mocked(reconcileGroup)).toHaveBeenCalledWith(mlsService, GROUP, expect.any(Function));
+    expect(vi.mocked(escalateReconciliation)).toHaveBeenCalledWith(
+      mlsService,
+      GROUP,
+      expect.any(Function)
+    );
   });
 
   /**

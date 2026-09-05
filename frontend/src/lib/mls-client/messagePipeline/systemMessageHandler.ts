@@ -10,7 +10,12 @@ import { resolveDisplayNames } from '$lib/utils/users/displayName';
 import { applyReaction, mergeReactions } from '$lib/utils/chat/messageReactions';
 import { editSupersedes } from '$lib/utils/chat/editPrecedence';
 import { purgeConversation, retireConversation } from '$lib/utils/chat/conversations';
-import { digestIdentity, noteProbeReceived } from '$lib/utils/chat/historyDigestRendezvous';
+import {
+  digestIdentity,
+  noteProbeReceived,
+  takeDigestSolicitation,
+} from '$lib/utils/chat/historyDigestRendezvous';
+import { answerHistoryDigest } from '$lib/utils/chat/historyDiffAnswer';
 import { parseHistoryDigest, selectEntryIdsForPrefixes } from '$lib/utils/chat/historyManifest';
 import { mergeHistoryFloor, parseHistorySince } from '$lib/utils/chat/historyWindow';
 import { parseHistoryStateKey } from '$lib/utils/chat/historyStateKey';
@@ -229,7 +234,7 @@ export async function handleSystemEvent(
       log(`[HISTORY_DIGEST] No window stated by ${senderNorm} for ${convoKey.slice(0, 8)}…`);
       return true;
     }
-    noteProbeReceived(convoKey, from, { kind: 'digest', digest, since });
+    const takenByAWaiter = noteProbeReceived(convoKey, from, { kind: 'digest', digest, since });
     const size =
       digest.mode === 'ids'
         ? `${digest.ids.length} id(s)`
@@ -237,6 +242,41 @@ export async function handleSystemEvent(
     log(
       `[HISTORY_DIGEST] From ${senderNorm} for ${convoKey.slice(0, 8)}… - ${digest.mode}, ${size}, asking from ${since > 0 ? new Date(since).toISOString() : 'the beginning'}`
     );
+
+    // THE LATE HALF OF AN EXCHANGE WE OPENED, and answering it here is what stops a slow peer from
+    // costing messages permanently. `handleHistoryRequest` waits `DIGEST_TTL_MS` for this frame and
+    // then returns; the digest that arrives afterwards used to be recorded and never looked at
+    // again, and nothing anywhere would ask a second time - measured 2026-09-05, a device that had
+    // just rejoined took 67 s to drain twenty external joins against that 60 s wait and stayed three
+    // messages short for ever.
+    //
+    // It needs no continuation because it needs no memory: the digest carries the manifest and the
+    // window, our store carries the rest. `takeDigestSolicitation` is what keeps it addressed - this
+    // leg is a group broadcast, so every member records it, and only the one that ASKED consumes an
+    // outstanding solicitation and answers. The election still elects exactly one responder.
+    if (!takenByAWaiter && takeDigestSolicitation(convoKey, from)) {
+      // SILENT, because this IS the road now and it says nothing a reader can act on. The line above
+      // reports the digest, and `[HISTORY_REQ] ... diff with <them>` reports what it produced; a
+      // third line between them announced a road that no longer has an alternative, once per group
+      // per enrolment.
+      //
+      // OUR MAILBOX FIRST, for the same reason every other store read in this file waits: a diff
+      // resolved mid-drain names what we hold SO FAR and tells the asker that is all there is.
+      answerAfterMailboxDrained(mlsService, () =>
+        answerHistoryDigest({
+          groupId: convoKey,
+          requesterIdentity: from,
+          selfIdentity: digestIdentity(userId, mlsService.getDeviceId()),
+          digest,
+          since,
+          deps: { storage, deviceKeyB64, mlsService, log },
+        }).catch((e) =>
+          log(
+            `[HISTORY_DIGEST] Late answer failed for ${convoKey.slice(0, 8)}…: ${String(e).slice(0, 120)}`
+          )
+        )
+      );
+    }
     return true;
   }
 

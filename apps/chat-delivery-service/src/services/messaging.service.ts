@@ -188,6 +188,28 @@ export interface NotifyWelcomeRequestBody {
  */
 const MAX_HISTORY_EXCLUSIONS = 128;
 
+/**
+ * The longest member key an election will consider skipping, and it is measured rather than picked.
+ *
+ * A member key is `userId:deviceId`. A user id is a 64-character hex digest, and a device id is
+ * `<platform>-<that same 64-character digest>-<mint>-<suffix>` - so a real one on this platform is
+ * **147 characters for a browser and 149 for the phone**, both measured on 2026-09-05.
+ *
+ * IT USED TO BE 128, WHICH IS SHORTER THAN EVERY KEY THIS SERVER HAS EVER ISSUED. The filter
+ * dropped them all, silently, and the exclusion list has therefore never excluded anybody: the
+ * coverage chase - whose entire termination argument is *"the next election EXCLUDES every member
+ * that has stated one, so each step of the walk removes exactly one member"* - could not remove one,
+ * and the client's own guard against a server that ignores an exclusion fired instead, stopping the
+ * walk. Found by HEAL-REVOKE-7, which asked the server nine times to skip a sleeping phone and was
+ * handed it back every time. The number came from `MAX_HISTORY_EXCLUSIONS` beside it - two limits
+ * that look alike and count different things, one of them never checked against a real key.
+ *
+ * 256 leaves room for a longer platform prefix or mint without being an invitation: the guard is
+ * against a hostile client making this server hold and compare something large, and 128 keys of 256
+ * characters is 32 kB at worst.
+ */
+const MAX_MEMBER_KEY_LENGTH = 256;
+
 export interface NotifyHistoryRequestBody extends NotifyWelcomeRequestBody {
   /**
    * Member keys (`userId:deviceId`) this requester has already heard from, and does not want elected
@@ -1966,8 +1988,18 @@ export class MessagingService {
     // membership set is stored as it was written - two spellings of one fact, and a mismatch here
     // would silently re-elect the member the requester just excluded.
     const rawExclude = (Array.isArray(body.exclude) ? body.exclude : []).filter(
-      (k): k is string => typeof k === 'string' && k.includes(':') && k.length <= 128
+      (k): k is string =>
+        typeof k === 'string' && k.includes(':') && k.length <= MAX_MEMBER_KEY_LENGTH
     );
+    // A KEY DROPPED HERE IS AN EXCLUSION THE CALLER BELIEVES IT MADE, so it is said rather than
+    // filtered in silence - that silence is what let a 128-character cap discard every real member
+    // key for months without one line anywhere saying so.
+    const rawGiven = Array.isArray(body.exclude) ? body.exclude.length : 0;
+    if (rawGiven > rawExclude.length) {
+      this.logger.warn(
+        `[HISTORY_REQ][${traceId}] ${rawGiven - rawExclude.length} exclusion(s) were unusable and dropped group=${groupId} requester=${requesterUserId}:${requesterDeviceId}`
+      );
+    }
     if (rawExclude.length > MAX_HISTORY_EXCLUSIONS) {
       // A chase excludes at most one member per step, so a list longer than any group's membership
       // is a client fault rather than a big conversation. Truncating silently would turn it into a
