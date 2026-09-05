@@ -87,6 +87,21 @@
  * messages sent. A runner that only sent messages would pass while the mechanism that matters was
  * never exercised.
  *
+ * **AND THE MESSAGE HALF WAS MISSING FROM THE CODE UNTIL 2026-09-05, while this paragraph claimed it
+ * for a week.** The runner moved MEMBERSHIP only - a group created, a group deleted - so "the world
+ * changes a lot" was half true, HEAL-REVOKE-5 was structurally identical to HEAL-REVOKE-3, and the
+ * equality it asserted was about group READINESS and nothing about content. Found by reading the
+ * file against its own docstring while row 5 ran green. The gap it left is the one a reader would
+ * least expect a green row to have: a device could come back holding every group and none of the
+ * conversation, and every assertion here would have held.
+ *
+ * **THE MESSAGE EQUALITY IS AN EQUALITY TOO, AND THAT IS WHAT MAKES IT ASSERTABLE.** A device that
+ * joins a group at epoch N cannot decrypt what was said at epoch N-1 - that is MLS working, not a
+ * loss - so "the returning device holds the messages sent while it was away" is NOT a claim this row
+ * may make. What it may claim is that it holds exactly what a device minted minutes later holds:
+ * whatever forward secrecy costs, it must cost both the same. `theSameMESSAGESArrived` is that, and
+ * it is the only form in which the question has a right answer.
+ *
  * IT REVOKES THROUGH THE PRODUCT'S OWN PATH. `purge-devices.mjs` drives the device panel, so the
  * DELETE that runs is the one a person triggers, with `purgeDeviceFootprint` behind it. A row that
  * deleted a row from the database would be measuring a state the product never produces, and the
@@ -103,7 +118,16 @@
  * to eight characters.
  */
 import { spawnSync } from "node:child_process";
-import { client, ensureChat, evaluate } from "../chat.mjs";
+import {
+  client,
+  countMessage,
+  ensureChat,
+  evaluate,
+  openConversation,
+  pollFact,
+  send,
+  settledCount,
+} from "../chat.mjs";
 import {
   census,
   enrolledDeviceCount,
@@ -112,6 +136,8 @@ import {
   MAX_DEVICES_PER_USER,
   revokedAt,
 } from "../devices.mjs";
+import { reloadAndWait } from "../cdp.mjs";
+import { psql } from "../estate.mjs";
 import { deviceResidue } from "./footprint.mjs";
 import { createGroup, deleteGroup } from "../groupnav.mjs";
 import { isUp, killBrowser, startBrowser } from "../launch.mjs";
@@ -121,7 +147,10 @@ import { becomeANewDeviceAndConfirm } from "../newdevice.mjs";
 import { onlineDevicesOf } from "./presence.mjs";
 import { stateOf } from "./ready-probe.mjs";
 import { bringToReady } from "./ready-repair.mjs";
-import { finishObserved, record, unmet } from "../results.mjs";
+// ALIASED: this file already has a `mark` of its own - a TIMELINE mark, minted on every note - and
+// the two are different nouns wearing one name. `mintMarker` is the campaign marker for a run of
+// messages, from `marker.mjs` through `results.mjs`.
+import { finishObserved, mark as mintMarker, record, unmet } from "../results.mjs";
 import { subsetArrivedAndSettled } from "./servable.mjs";
 import { HARNESS_ROOT, requireScript } from "../scriptpath.mjs";
 import {
@@ -296,6 +325,25 @@ if (row.orders && !row.orders.includes(order)) {
 /** How long the returning device may take to settle before the stall IS the measurement. */
 const SETTLE_MS = Number(opt("settle", "600")) * 1000;
 
+/**
+ * How many messages the actor says into the new group while the victim is revoked.
+ *
+ * THREE, AND THE NUMBER IS NOT ARBITRARY: one message cannot tell "it got the conversation" from "it
+ * got a message", and a large run turns a content check into a throughput check this row is not
+ * about. Three is enough for a partial arrival to be visible as a partial arrival.
+ */
+const MESSAGES_WHILE_AWAY = 3;
+
+/**
+ * How long either device may take to see them before the absence IS the measurement.
+ *
+ * IT IS A BUDGET AND NOT A SLEEP: the wait ends the instant the target is reached, so a device that
+ * has them already costs a single read. It exists so the two devices are asked the same question
+ * with the same patience - the whole point of an equality - and so a device that never gets there
+ * reports a bound rather than a snapshot.
+ */
+const MESSAGE_BUDGET_MS = 60_000;
+
 const T0 = Date.now();
 const mark = (what) => ({ what, at: Date.now() - T0, wall: new Date().toISOString() });
 const timeline = [mark("start")];
@@ -428,6 +476,24 @@ async function restoreTheFleet() {
   const back = await setTopology(["w1", "w2"]);
   note(`fleet restored ${JSON.stringify(back)}`);
   return back;
+}
+
+/**
+ * The first eight characters of the id of the group this runner just minted, or `null`.
+ *
+ * ITS OWN NAME IS SAFE TO PUT IN A QUERY: `debrisName()` generated it moments earlier from
+ * `Math.random()`, so it names nothing a person owns, and the eight characters it returns are what
+ * the app's own console prints anyway.
+ */
+function groupIdNamed(name) {
+  try {
+    const id = psql(`SELECT id FROM dm_groups WHERE name = '${name}' ORDER BY "createdAt" DESC LIMIT 1`)
+      .trim();
+    return id ? id.slice(0, 8) : null;
+  } catch (e) {
+    note(`could not read the id of ${name}: ${firstLine(e)}`);
+    return null;
+  }
 }
 
 /** A connection to the victim's browser, whatever state its page is in. */
@@ -737,6 +803,120 @@ const fingerprint = (readout) => ({
   serverActive: readout.server.active ?? null,
   serverDismissedStillMember: readout.server.dismissedStillMember ?? null,
 });
+
+/**
+ * WHAT A CLIENT SAID ABOUT JOINING A GROUP AND BEING HANDED ITS HISTORY - the evidence the message
+ * equality cannot supply on its own.
+ *
+ * A COUNT SAYS THE TWO DEVICES DISAGREE AND NOTHING ABOUT WHERE. `sendFullHistoryBundle` is sent by
+ * the ADDER the moment it adds a device (`actions.ts`, right after the Welcome), as application
+ * messages at the adder's epoch - so a joiner that has not finished processing its Welcome, or that
+ * was added before the messages existed, or that never got a bundle at all, are three different
+ * faults wearing one zero. Each leaves a different trail, and none of them is in `report()`: these
+ * lines are narration, not errors, so a clean observer says nothing about them.
+ *
+ * IT IS RECORDED ON EVERY RUN AND NOT ONLY ON A FAILURE. A trail that only appears when something
+ * broke has no baseline to be read against, and the first question about any of these lines is
+ * "does the device that WORKS print it too".
+ *
+ * CAPPED, AND ONLY ON THE TAGS THAT DECIDE THIS. The whole console of a device that has just
+ * enumerated fifteen groups is thousands of lines; five tags and a cap keep the ledger entry
+ * readable by whoever has to act on it.
+ */
+function historyTrail(cx, { limit = 40, about = null } = {}) {
+  // `READD` AND `SYNC_WATCHDOG` ARE HALF THE ANSWER AND WERE MISSING FROM THE FIRST VERSION. A
+  // device can reach a group two ways - a member ADDS it (Welcome, then `sendFullHistoryBundle`) or
+  // it lets itself in through the recovery seam (`requestReAdd` -> external join, then
+  // `reconcileGroup`). Only the first is a `[PENDING]` line, so a trail built from `[PENDING]` and
+  // `[HISTORY]` alone shows a device arriving from nowhere and says nothing about which path it
+  // took - which is precisely the question HEAL-REVOKE-5's message gap turns on.
+  // ANY TAG CONTAINING `HISTORY`, not a list of the ones remembered. The first version spelt the
+  // alternation out and `[HISTORY_RECONCILE]` matched none of it - the closing bracket has to follow
+  // the alternative immediately - so the reconciliation OUTCOME, which is the one line that says
+  // whether anybody was elected to answer, was invisible in a trail written to explain a missing
+  // history. `[HISTORY_STATE]` and `[HISTORY_COVERAGE]` were lost the same way.
+  const wanted = /\[(?:[A-Z_]*HISTORY[A-Z_]*|PENDING|WELCOME|DIGEST|GAP|READD|SYNC_WATCHDOG|DISCOVERY)\]/;
+  let lines = consoleLines(cx).filter((l) => wanted.test(l));
+  const total = lines.length;
+  // ABOUT ONE GROUP, when the caller knows which one. The app truncates every id to eight
+  // characters in the console, so the prefix is the whole of what a line can carry - and a trail of
+  // forty lines about fifteen groups answers nothing about the one that failed.
+  const mine = about ? lines.filter((l) => l.includes(about)) : [];
+  lines = lines.slice(-limit);
+  return about ? { total, about, mine, lines } : { total, lines };
+}
+
+/**
+ * How many messages carrying `marker` a client can see in `name`, waited for against a TARGET.
+ *
+ * IT WAS `settledCount` FOR EXACTLY ONE RUN, AND THAT RUN MANUFACTURED A DEFECT. HEAL-REVOKE-5 on
+ * 2026-09-05 reported the returned device seeing 0 of 3 and the reference seeing 3 of 3 - an
+ * asymmetry that reads as a product fault and was an artefact of WHEN each was asked. The returned
+ * device is read the moment its sidebar settles; the reference cannot be read until it has been
+ * minted, enrolled and settled, which is half a minute later in the same run. `settled: true` at
+ * zero says the count stopped changing for 700 ms, which on a history fetch that has not started
+ * yet is the most confident wrong answer available. **This rig's own rule: a zero that could mean
+ * "silent" or "not yet" is evidence for nothing.**
+ *
+ * SO BOTH DEVICES GET THE SAME BUDGET AND BOTH ELAPSED TIMES ARE RECORDED. The wait ends the instant
+ * the target is reached, so the common case costs nothing; a device that never reaches it spends the
+ * whole budget and the row says so with a number rather than with a snapshot. A difference in TIME
+ * is dirt carrying a number, and a difference in the final COUNT is the finding - which is the same
+ * distinction the ORDER pairs are adjudicated by.
+ *
+ * IT STILL SETTLES AFTER REACHING THE TARGET, because "at least three" is not the claim: a duplicate
+ * is the class this campaign exists to see, so the count has to be shown to STOP at three.
+ *
+ * A FAILURE COMES BACK AS `null`, NEVER AS ZERO. A conversation that could not be opened and a
+ * conversation holding nothing are different facts, and an equality between two zeros of the wrong
+ * kind is the most convincing wrong answer this file could produce.
+ */
+async function messagesIn(cx, name, marker, target) {
+  try {
+    await openConversation(cx, name);
+  } catch (e) {
+    return { count: null, settled: false, reachedInMs: null, why: `could not open: ${firstLine(e)}` };
+  }
+  const reached = await pollFact(async () => (await countMessage(cx, marker)) >= target, {
+    timeoutMs: MESSAGE_BUDGET_MS,
+    everyMs: 500,
+  });
+  const r = await settledCount(cx, marker, { timeoutMs: 15_000 });
+  const seen = {
+    count: r.count,
+    settled: r.settled,
+    reachedInMs: reached.ok ? reached.elapsedMs : null,
+    waitedForMs: reached.elapsedMs,
+    why: null,
+  };
+  if (reached.ok) return seen;
+
+  /**
+   * A MISS IS TWO DIFFERENT FAULTS AND THIS IS WHAT SEPARATES THEM, at the cost of one reload on a
+   * run that has already failed.
+   *
+   * `countMessage` reads RENDERED bubbles, so a zero means either "the client does not have them"
+   * or "the client has them and is not showing them" - and those want opposite fixes. HEAL-REVOKE-5
+   * on 2026-09-05 made the distinction urgent: the returned device reported 0 of 3 after 60 s while
+   * its OWN console carried `[HISTORY_BUNDLE] 3 messages received from the inviting peer`, so it
+   * had been handed exactly what it was said to be missing.
+   *
+   * A reload rebuilds the view from the store and answers it in one gesture: still 0 means the
+   * bundle never landed in the store, and 3 means it did and the open conversation never re-rendered
+   * it. Taken ONLY on a miss, so a passing run pays nothing and the reload can never be what made
+   * the row pass.
+   */
+  const before = seen.count;
+  try {
+    await reloadAndWait(cx);
+    await openConversation(cx, name);
+    const after = await settledCount(cx, marker, { timeoutMs: 20_000 });
+    seen.afterReload = { count: after.count, settled: after.settled, wasBefore: before };
+  } catch (e) {
+    seen.afterReload = { count: null, settled: false, wasBefore: before, why: firstLine(e) };
+  }
+  return seen;
+}
 
 /** The named differences between two fingerprints, so a FAIL says WHICH number moved. */
 const differences = (a, b) =>
@@ -1264,6 +1444,12 @@ if (row.stopsAtTheWipe) {
 const born = debrisName();
 note(`${ACTOR} creates ${born} while the victim is revoked`);
 await createGroup(actorCx, born, { label: "healrevoke" });
+// THE ID, NOT THE NAME, BECAUSE THE CONSOLE ONLY EVER CARRIES THE ID. Every log line truncates a
+// group to eight hex characters, so a trail cannot be filtered to this group without it - and the
+// name never appears in one. Read from the table rather than scraped, and cut to the same eight so
+// the ledger entry carries no more than the console already does.
+const bornId = groupIdNamed(born);
+note(`${born} is ${bornId ?? "(id unreadable)"}`);
 note(`${ACTOR} deletes ${doomed} while the victim is revoked`);
 const deleted = await deleteGroup(actorCx, doomed).then(
   () => true,
@@ -1273,6 +1459,23 @@ const deleted = await deleteGroup(actorCx, doomed).then(
   },
 );
 note(`${doomed} deleted: ${deleted}`);
+
+// AND THE OTHER KIND OF CHANGE. Membership moves the epoch and cannot be replayed; a message is a
+// ciphertext that can be handed over again, and the two are repaired by different mechanisms. A
+// runner that moved only membership - which this one did until 2026-09-05 - leaves the whole
+// content half of "did everything catch up" unmeasured.
+const saidWhileAway = mintMarker("HREV");
+await openConversation(actorCx, born);
+let sentWhileAway = 0;
+for (let i = 1; i <= MESSAGES_WHILE_AWAY; i += 1) {
+  try {
+    await send(actorCx, `${saidWhileAway} ${i}/${MESSAGES_WHILE_AWAY}`);
+    sentWhileAway += 1;
+  } catch (e) {
+    note(`sending ${i}/${MESSAGES_WHILE_AWAY} into ${born} threw: ${firstLine(e)}`);
+  }
+}
+note(`${ACTOR} said ${sentWhileAway}/${MESSAGES_WHILE_AWAY} thing(s) in ${born} while the victim was away`);
 
 // ---------------------------------------------------------------------------------------------
 // THE RETURN, in the order the row asks for.
@@ -1382,6 +1585,13 @@ note(
 );
 const usability = await navigationCost(back.cx);
 note(`usability ${JSON.stringify(usability)}`);
+// TAKEN AFTER `navigationCost`, deliberately: that probe is the row's "was it usable while it
+// healed" measurement and it must meet a sidebar nobody has navigated away from. This one OPENS a
+// conversation, which is exactly the state the other one is written to detect the absence of.
+const returnedSaw = await messagesIn(back.cx, born, saidWhileAway, sentWhileAway);
+note(`the returned device sees ${JSON.stringify(returnedSaw)} of ${born}`);
+const returnedTrail = historyTrail(back.cx, { about: bornId });
+note(`the returned device's join/history trail: ${returnedTrail.total} line(s)`);
 const backReport = asAReturningDevice(await report(back.observer));
 back.cx.close();
 
@@ -1464,6 +1674,11 @@ if (row.stopsAtTheReturn) {
       samples: back.watch.samples,
       doomedGroup: doomedAfterReturn,
       newGroup: bornAfterReturn,
+      // RECORDED AND NOT ASSERTED, and the reason is MLS rather than modesty. A device joining a
+      // group at epoch N cannot decrypt what was said at epoch N-1, so any number here - including
+      // zero - is consistent with a correct product, and only a REFERENCE device settles what the
+      // right number was. Row 2 mints none; rows 3, 5, 7 and 8 do, and they assert the equality.
+      messagesSaidWhileAway: { sent: sentWhileAway, seen: returnedSaw, trail: returnedTrail },
     },
     usability,
     topology,
@@ -1499,6 +1714,14 @@ const bornOnFresh = await rowNamed(fresh.cx, born);
 note(
   `on the reference: ${doomed} ${JSON.stringify(doomedOnFresh)}, ${born} ${JSON.stringify(bornOnFresh)}`,
 );
+const freshSaw = await messagesIn(fresh.cx, born, saidWhileAway, sentWhileAway);
+note(`the reference sees ${JSON.stringify(freshSaw)} of ${born}`);
+const freshTrail = historyTrail(fresh.cx, { about: bornId });
+note(`the reference's join/history trail: ${freshTrail.total} line(s)`);
+// THE ADDER'S SIDE TOO, because `sendFullHistoryBundle` is sent BY the adder: a bundle that was
+// never sent and one that was sent and not applied are the same zero on the joiner.
+const actorTrail = historyTrail(actorCx, { about: bornId });
+note(`the actor's join/history trail: ${actorTrail.total} line(s)`);
 const freshReport = asAFreshlyMintedDevice(await report(fresh.observer));
 fresh.cx.close();
 
@@ -1531,6 +1754,31 @@ const expectations = {
   itReturnedAsTheSamePerson: back.who.userId === victimBefore.userId,
   /** THE ROW'S POINT: it ended where a fresh device ends. */
   itEndedWhereAFreshDeviceEnds: gap.length === 0,
+  /**
+   * AND IT SEES THE SAME CONVERSATION, not merely the same group list. Structure and content are
+   * repaired by different mechanisms, and until 2026-09-05 this row asserted only the first: a
+   * device could have come back holding every group and none of what was said in them, with every
+   * tick here green.
+   *
+   * AN EQUALITY AND NOT A COUNT, because forward secrecy makes the absolute number meaningless. A
+   * device that joins at epoch N cannot read epoch N-1, so ZERO is a correct answer for both - what
+   * cannot be correct is the two disagreeing, because they joined the same group in the same window
+   * minutes apart.
+   */
+  theSameMESSAGESArrived: returnedSaw.count === freshSaw.count,
+  /**
+   * AND BOTH READINGS ARE REAL. `null` is what `messagesIn` returns when it could not open the
+   * conversation at all, and two nulls compare equal - which would be this file's most convincing
+   * wrong answer. A count still moving at its deadline is not evidence either.
+   */
+  bothMessageReadingsWereTaken: returnedSaw.count !== null && freshSaw.count !== null &&
+    returnedSaw.settled === true && freshSaw.settled === true,
+  /**
+   * AND THE WORLD REALLY MOVED IN BOTH WAYS. A membership change and a message are repaired by
+   * different mechanisms, so a run where nothing was SAID has exercised one of them and would pass
+   * on an equality between two devices that were never asked anything.
+   */
+  theWorldMovedInBothWays: deleted === true && sentWhileAway === MESSAGES_WHILE_AWAY,
   /** Both actually finished. An equality between two stalls is not the equality being claimed. */
   bothSettled: back.watch.settled === true && freshSettle.settled === true,
   /** The group deleted while it was away is gone from BOTH, and gone the same way. */
@@ -1669,6 +1917,14 @@ const detail = {
   // The whole verdict of the row, in one field: which number differs between a returned device and a
   // fresh one. Empty is the PASS.
   equalityGap: gap,
+  saidWhileAway: {
+    marker: saidWhileAway,
+    into: born,
+    sent: sentWhileAway,
+    returnedSaw,
+    freshSaw,
+    trail: { returned: returnedTrail, reference: freshTrail, actor: actorTrail },
+  },
   usability,
   topology: back.alone ? { atTheReturn: topology, afterTheLift: back.alone.lifted } : topology,
   fleetAtTheEnd: (() => {

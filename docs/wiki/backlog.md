@@ -1694,6 +1694,89 @@ rows with the invitation question in
 [Communities and permissions](#communities-and-permissions): a notification that never arrives and a
 notification that arrives undecryptable are different failures, and only the logcat separates them.
 
+### P1 - a device that joins a group is silently told its history is complete, and the messages sent minutes earlier are lost to it for good (measured on the local estate 2026-09-05, five reproductions)
+
+**HEAL-REVOKE-5 found it on the first run that ever sent a message.** The runner's own docstring had
+claimed for a week that the world it moves while the device is away is made of *"a group created, a
+group deleted, and messages sent"*; the code moved MEMBERSHIP only. Adding the message half took one
+run to fail.
+
+**THE MEASUREMENT, IDENTICAL IN FIVE RUNS.** W1 creates a group while the victim is revoked, says
+three marked things in it, and the victim then comes back:
+
+| | messages seen | time |
+| --- | --- | --- |
+| the returned device | **0 of 3** | after waiting **60 s** |
+| a reference device minted ~90 s later, same profile, same group | **3 of 3** | already there, **2 ms** |
+
+**IT IS NOT THE INSTRUMENT, AND THREE SEPARATE THINGS SAY SO.** Both devices are given the same
+budget and the wait ends the instant the target is reached, so the reference's 2 ms and the returned
+device's 60 s are the same question asked with the same patience. A RELOAD on the returned device -
+which rebuilds the view from the store - still shows 0, so this is not a conversation failing to
+re-render something it holds. And the first version of the probe DID manufacture a false asymmetry
+by reading the two devices half a minute apart; that was found and removed before any of this was
+believed, which is why the budget is equal now.
+
+**IT IS NOT FORWARD SECRECY EITHER, WHICH IS THE FIRST THING TO RULE OUT.** A device that joins at
+epoch N cannot read epoch N-1, and that would blind BOTH devices equally - the assertion is an
+EQUALITY for exactly that reason. Both joined after the messages were sent. One got them.
+
+**BOTH DEVICES TAKE THE SAME PATH, VERBATIM.** Neither is added by a member; both let themselves in:
+
+    [READD] 968a2339... roster seat with NO queued Welcome and NO add in flight - nobody owes us
+            anything; serving ourselves
+    [READD] 968a2339... externalJoin -> joined
+    [HISTORY_STATE] Sent for 968a2339... - 00000000..., from 2026-06-07T00:00:00.000Z
+    [HISTORY_RECONCILE] asked 968a2339... whether we hold the same history
+
+Same path, same state key, same window. `recovery.ts` calls `reconcileGroup` right after an external
+join precisely because *"an external join lands at the current epoch WITHOUT the pre-join history,
+which only a member can re-encrypt"* - so the mechanism is there and both devices used it.
+
+**THE DIFFERENCE IS ENTIRELY ON THE ANSWERING SIDE, AND IT IS A SILENCE.** W1's console:
+
+| when (local) | what W1 did |
+| --- | --- |
+| 21:49:50 | said the three things - they are in its own store |
+| 21:49:56 | `[HISTORY_STATE] From ... for 968a2339...` - **received the returning device's key, and nothing more** |
+| 21:51:21 | received the reference's key, `Keys differ`, asked it to describe itself |
+| 21:51:25 | `[HISTORY_BUNDLE] Chunk 1/1 - 3 msg`, `Diff sent: 3 of 3 requested` |
+
+**Six seconds after storing three messages of its own, W1 answered nothing at all.** Not
+`same state as ... - nothing to do`, not `no probe from ... - nothing to answer`, not `store
+unreadable - staying silent`: `handleHistoryRequest` writes a line on every branch it can take, and
+none of them is in the window. **The comparison never ran.** Ninety seconds later the identical ask
+from an identical device ran it and worked.
+
+**WHAT THAT LEAVES, AND IT NEEDS A SERVER-SIDE INSTRUMENT.** `reconcileGroup` asks the SERVER to
+elect the responder - *"it elects the responder and answers `no_peer_online` immediately when there
+is none"* - and the asker logged neither `no member online` nor `every reachable member has stated
+its coverage`, so the server elected somebody. Two candidates remain and one measurement separates
+them: **whether the election named a device that was not there**. The account's older device
+`web-...-mtoqj0hh-a0nb` is on the roster of that group and was offline throughout - W1's own sweep
+says `already in tree ... skip (will join via queued Welcome)` about it. If the election may name a
+roster seat rather than a live socket, the ask is delivered to nobody.
+
+**WHY IT DOES NOT HEAL, WHICH IS WHAT MAKES IT A P1 RATHER THAN A LATENCY BUG.** The ask is
+coalesced (`recentlyAsked` / `PROBE_COALESCE_MS`) and the only thing that raises it again for a group
+is a NEW unreadable frame or a fresh connection edge. **A device that joined late holds no unreadable
+frame** - the messages predate its membership, so there is nothing for it to notice missing - and the
+reconciler's own trigger is `if (sawUnreadableFrame)`. **You cannot reconcile what you never saw.**
+So the conversation settles, shows READY, shows `amber: []`, and is simply short of three messages,
+for ever, with nothing anywhere saying so.
+
+**IT IS THE USER'S OWN REPORTED SYMPTOM CLASS**, and it is worth reading beside the P1 about twelve
+dropped messages: *"j'ai l'impression de n'avoir qu'une petite partie des messages qu'il m'envoie"*.
+A conversation that is READY and incomplete is indistinguishable, to its owner, from one that is
+complete.
+
+**WHAT IS OWED, IN ORDER.** Measure the election - one read of what the server returns for a group
+whose only other member is offline. Then decide where the repair belongs: a device that has just
+JOINED a group knows it holds no history for it, and that is a stronger trigger than an unreadable
+frame, because it is available exactly when the gap is created. The runner records the whole
+`[READD]`/`[HISTORY*]` trail of all three clients on every run now, so the next measurement is a
+re-run rather than an investigation.
+
 ### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
 
 `login.mjs` drives the real login, so the observed TAB navigates to Authentik and back - and a
