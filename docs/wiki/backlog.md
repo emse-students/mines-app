@@ -1798,9 +1798,15 @@ exactly what five cold starts manufacture.
 
 Two things are owed before a fix: whether the thunk is reached at all on these runs, and where the
 duplicate delivery that reaches the decryptor comes from - `[QUEUE] delivery ... arrived twice`
-(**seen again 2026-09-05 on HEAL-REVOKE-9**, on a device that had just been wiped and logged back
-in, which is a SECOND population and a different path into the same line - and after that row's
-noise was named it is the only dirt left there, so it now holds a row at `PASS-DIRTY` on its own)
+(**seen four times on 2026-09-05, and the three new ones narrow it**: TAB-3b, then HEAL-REVOKE-9 and
+HEAL-REVOKE-2 on a device that had just been WIPED and logged back in, then HEAL-REVOKE-3 on a device
+FRESHLY MINTED and never revoked at all. So it is not the tab-leadership path TAB-3b exercises - one
+tab reproduces it - and it is not revocation either: **what the three have in common is a client with
+an EMPTY store pulling a backlog it has never acknowledged before**, which is where an ack still in
+flight has the most rows to race. On each of those three rows, once the row's own noise was named, it
+is the ONLY dirt left, so this one line alone holds three cells at `PASS-DIRTY`. **It is deliberately
+forgiven on none of them**: a row made clean by widening a needle is worse than one reporting
+honestly, and a defect costing three cells is easier to justify fixing than one nobody can see)
 recognises one class of duplicate and acknowledges it without decrypting, so this one took a
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
@@ -3031,9 +3037,9 @@ Three separate things, in the order they have to be answered:
 
    **AND THE FIRST ATTEMPT AT THIS ROW WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S**, which
    is worth recording because the sentence it wrote read exactly like one: *"the victim could not be
-   brought to an enrolled starting point"*. `newdevice.mjs` spawned `login.mjs` by BARE NAME, so
-   every mint driven from `archive/` - which is every HEAL-REVOKE row - exited 1 with `Module not
-   found` on a stderr the helper discarded. Ninth sighting of that defect and the first one
+   brought to an enrolled starting point"*. `newdevice.mjs` spawned `login.mjs` by BARE NAME, so a
+   mint resolved it against the CALLER'S working directory - fine from the harness root, `Module not
+   found` after a `cd archive` - and exited 1 on a stderr the helper discarded. Ninth sighting of that defect and the first one
    `spawn-selftest.mjs` had been green for; the gate is now an allowlist of resolved forms rather
    than a ban on one spelling ([durable-rules](durable-rules.md)).
 

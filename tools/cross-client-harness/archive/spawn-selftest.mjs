@@ -23,9 +23,11 @@
  *
  * AND IT WAS FOUND A NINTH TIME ON 2026-09-05, BY A ROW, WITH THIS GATE ALREADY GREEN.
  * `newdevice.mjs` spawned `[script, ...args]` out of a two-line helper whose callers pass
- * `"login.mjs"`, so every mint driven from `archive/` - which is every HEAL-REVOKE row - exited 1
- * with `Module not found` on a stderr the helper discarded, and HEAL-REVOKE-1 recorded `INVALID`
- * blaming the product. The rule below used to be "no BARE STRING LITERAL in argv", and one line of
+ * `"login.mjs"`, so a mint resolved the name against the CALLER'S working directory. That is what
+ * kept it invisible: `bun archive/healnew.mjs` from the harness root works and `cd archive && bun
+ * healrevoke.mjs` does not, so the same runner passes or fails on a `cd` nobody records. When it
+ * fails it exits 1 with `Module not found` on a stderr the helper discarded, and HEAL-REVOKE-1
+ * recorded `INVALID` blaming the product. The rule below used to be "no BARE STRING LITERAL in argv", and one line of
  * indirection is all it takes to satisfy that while breaking the thing it stands for. **It is now
  * an allowlist of RESOLVED FORMS**, which is the claim the rule was always making: the path handed
  * to the runtime must be absolute, and `requireScript(...)`, `join(...)` and a runtime flag are the

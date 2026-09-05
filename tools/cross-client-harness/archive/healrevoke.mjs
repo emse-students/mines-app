@@ -3,6 +3,8 @@
  * THE REVOKED DEVICE THAT COMES BACK AFTER THE WORLD MOVED - one runner, one row per invocation.
  *
  *   bun healrevoke.mjs --row 1                  is the local store actually gone after a revocation?
+ *   bun healrevoke.mjs --row 2                  it reconnects - is it like-new, holding nothing?
+ *   bun healrevoke.mjs --row 3                  ... and does it end where a FRESH device ends?
  *   bun healrevoke.mjs --row 5                  revoked, the world changes a lot, then it returns
  *   bun healrevoke.mjs --row 7 --order first    it returns BEFORE the other devices are online
  *   bun healrevoke.mjs --row 7 --order last     it returns AFTER they are
@@ -23,6 +25,36 @@
  * not a quantity to compare against anything. It creates the doomed group all the same, and deletes
  * it before it exits: a wipe measured on a device that held nothing proves nothing, so the victim is
  * made to hold real MLS state first, and the group is not left behind for a sweep to find.
+ *
+ * ROW 2 STOPS AT THE RETURN, AND ITS ASSERTIONS ARE CHOSEN TO BE ONES THE SERVER CANNOT SATISFY.
+ * That is the whole reason it is a row of its own: a revoked id is BLACKLISTED, so the client is
+ * forced to mint a new one whatever its disk holds - and "it came back as a new device" is therefore
+ * true of a device that kept every byte. The row leans on the one thing only a local store can
+ * produce: a group DELETED while the device was away. The server will never serve it; a device
+ * remembering it shows it anyway. So `theDeletedGroupDidNotComeBack` is the blacklist-proof half,
+ * `theNewGroupArrived` is its mirror - a group created while away can only come from enumeration -
+ * and the residue read at the wipe is asserted again here because row 2's claim rests on it.
+ *
+ * IT DOES NOT MINT A REFERENCE, which is what makes it cheaper than row 3. "Holding nothing from
+ * before" is a claim about ABSENCE and needs nothing to compare against; "it ended where a fresh
+ * device ends" is a claim about a QUANTITY and cannot be made without one.
+ *
+ * WHAT IT DELIBERATELY DOES NOT ASSERT: that the first readout after the return shows zero ready
+ * rows. It would be the sharpest evidence there is - a surviving store renders ready immediately,
+ * an enumerated one starts amber - and it is unreadable on this topology. The seeded device of
+ * HEAL-REVOKE-1 settled 7 of 7 rows in TWO MILLISECONDS, and HEAL-NEW-15 already records that the
+ * amber window opens before the login has finished and closes before any reader placed after it can
+ * exist. An assertion that can only be true by luck is not one.
+ *
+ * ROW 3 IS ROW 2 PLUS THE REFERENCE, PLUS ONE ASSERTION NO OTHER ROW MAKES. The equality against a
+ * freshly minted device is rows 5, 7 and 8's mechanism and it answers "did it resynchronise as a new
+ * device would". What row 3 adds is the user's actual injury: *a restore that stops halfway looks
+ * complete*, which is how their PC lost conversations without anyone knowing to retry. So a
+ * SHORTFALL MUST BE VISIBLE - if the returned device holds less than the reference, the app must
+ * still be SAYING so, with rows amber. It is a conditional assertion by construction: it can only
+ * fail on a run that has a shortfall, and on a run that has none it claims nothing, which is honest
+ * rather than weak. The alternative - asserting amber rows unconditionally - would fail every clean
+ * run and pass nothing.
  *
  * ROW 9 IS ITS OWN QUESTION AND STOPS EARLIER THAN THE OTHERS. `isDeviceRevoked` answers `false`
  * when it cannot reach the server, because a transport failure is not an answer - so a device
@@ -108,6 +140,7 @@ import {
   FRESH_CLIENT_NARRATION,
   ignoringExpectedLog,
   IDP_CONSOLE_NARRATION,
+  NO_LOCAL_STATE_NARRATION,
   REVOKED_RETURN_NARRATION,
   ignoringExpectedRefusal,
   ignoringOfflineCut,
@@ -157,6 +190,7 @@ const forgiving = (rep, narration) =>
 const asAReturningDevice = (rep) =>
   forgiving(rep, [
     ...IDP_CONSOLE_NARRATION,
+    ...NO_LOCAL_STATE_NARRATION,
     ...REVOKED_RETURN_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...FRESH_CLIENT_NARRATION,
@@ -167,6 +201,7 @@ const asAReturningDevice = (rep) =>
 const asAFreshlyMintedDevice = (rep) =>
   forgiving(rep, [
     ...IDP_CONSOLE_NARRATION,
+    ...NO_LOCAL_STATE_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
     ...FRESH_CLIENT_NARRATION,
@@ -189,6 +224,7 @@ const asAFreshlyMintedDevice = (rep) =>
 const asTheWipedVictim = (rep) =>
   forgiving(rep, [
     ...IDP_CONSOLE_NARRATION,
+    ...NO_LOCAL_STATE_NARRATION,
     ...REVOKED_RETURN_NARRATION,
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
@@ -226,6 +262,15 @@ const ROWS = {
     id: "HEAL-REVOKE-1",
     what: "revoked through the device panel - is the local store actually gone?",
     stopsAtTheWipe: true,
+  },
+  2: {
+    id: "HEAL-REVOKE-2",
+    what: "the revoked device reconnects - is it like-new, holding nothing from before?",
+    stopsAtTheReturn: true,
+  },
+  3: {
+    id: "HEAL-REVOKE-3",
+    what: "the first reconnection resynchronises as a new device would, and a shortfall is REPORTED",
   },
   5: { id: "HEAL-REVOKE-5", what: "revoked, the world changes a lot, then it returns" },
   7: { id: "HEAL-REVOKE-7", what: "the ORDER of the return", orders: ["first", "last"] },
@@ -1341,6 +1386,96 @@ const backReport = asAReturningDevice(await report(back.observer));
 back.cx.close();
 
 // ---------------------------------------------------------------------------------------------
+// ROW 2 ENDS HERE - "holding nothing from before" is an ABSENCE, and needs nothing to compare with.
+// ---------------------------------------------------------------------------------------------
+if (row.stopsAtTheReturn) {
+  const slotsAtTheReturn = victimBefore.userId ? enrolledDeviceCount(victimBefore.userId) : null;
+  note(`the account spends ${slotsAtTheReturn}/${MAX_DEVICES_PER_USER} device slot(s) after this row`);
+
+  const returnExpectations = {
+    /** There was something to lose, and something to forget. */
+    theVictimHeldTheWorldFirst: seedSettle.settled === true && heldTheDoomedGroup === true,
+    theServerRecordedTheRevocation: revocation.revoked === true,
+    theServerForgotTheDevice:
+      revocation.wasAddressable === true && revocation.stillAddressable === false,
+    /** Row 1's claim, re-asserted because everything below rests on it having been true. */
+    theWipeLeftNothingOfTheAccount: leftBehind.empty === true,
+    theDiskWasActuallyRead: leftBehind.readable === true,
+    theDeviceWipedItself: wipe.wipeRan === true && wipe.wipeFinished === true,
+    noStoreSurvivedTheWipe: wipe.storesSurvived === false,
+    /**
+     * TRUE OF A DEVICE THAT KEPT EVERYTHING, AND ASSERTED ANYWAY. A revoked id is blacklisted, so
+     * the client cannot reuse it whatever its disk holds - which is exactly why this pair is
+     * necessary and not sufficient, and why the two below carry the row.
+     */
+    itReturnedAsANewDevice: !!back.who.deviceId && back.who.deviceId !== victimBefore.deviceId,
+    itReturnedAsTheSamePerson: back.who.userId === victimBefore.userId,
+    /**
+     * THE BLACKLIST-PROOF HALF. `doomed` was deleted while the device was away, so the server will
+     * never serve it and enumeration cannot produce it. A row for it can come from exactly one
+     * place: a local store that survived. Its absence is the claim "holding nothing from before",
+     * made in the one form the server cannot fake.
+     */
+    theDeletedGroupDidNotComeBack: doomedAfterReturn.present === false,
+    /**
+     * AND ITS MIRROR, so the absence above is not simply a device that arrived holding nothing at
+     * all. `born` was created while the device was away: it can ONLY have come from enumeration, so
+     * a ready row for it says the rebuild really happened rather than merely that the disk was
+     * empty. Together they separate "it forgot" from "it never arrived".
+     */
+    theNewGroupArrived: bornAfterReturn.ready === true,
+    /** It finished. An absence measured on a device still arriving is not an absence. */
+    itSettled: back.watch.settled === true,
+    theSettlePredicateKnewWhatToWaitFor: seedTarget.ids.size > 0 && back.target.ids.size > 0,
+    /** The app was navigable while it healed. */
+    navigableWhileHealing: usability?.openedInMs != null,
+    theWipeWindowWasActuallyRead: wipe.linesRead > 0,
+    timelineIsStamped: timeline.every((m) => typeof m.at === "number" && typeof m.wall === "string"),
+  };
+  const returnMissing = unmet(returnExpectations);
+  const returnVerdict = returnMissing.length === 0 ? "PASS" : "FAIL";
+  const returnObservers = {
+    victim: backReport,
+    actor: asTheActor(await report(actorObserver)),
+    wipeWindow: wipeReport,
+  };
+  const returnDetail = {
+    what: row.what,
+    slots: { before: slotsBefore, after: slotsAtTheReturn, cap: MAX_DEVICES_PER_USER },
+    seed: {
+      deviceId: victimBefore.deviceId,
+      settledInMs: seedSettle.settled ? seedSettle.elapsedMs : null,
+      state: seedState,
+      heldTheDoomedGroup,
+    },
+    revocation,
+    wipe,
+    leftBehind,
+    world: { created: born, deleted: doomed, deletionSucceeded: deleted },
+    returned: {
+      deviceId: back.who.deviceId,
+      settledInMs: back.watch.settled ? back.watch.elapsedMs : null,
+      stalledForMs: back.watch.settled ? null : back.watch.elapsedMs,
+      abandonedOn: back.watch.abandoned,
+      waitedFor: back.target.ids.size,
+      servableFrom: back.target.from,
+      state: returnedState,
+      stillAmber: returnedAmber,
+      samples: back.watch.samples,
+      doomedGroup: doomedAfterReturn,
+      newGroup: bornAfterReturn,
+    },
+    usability,
+    topology,
+    timeline,
+    unmet: returnMissing,
+    observers: returnObservers,
+  };
+  actorCx.close();
+  await finishObserved(row.id, returnVerdict, returnDetail, returnObservers, restoreTheFleet);
+}
+
+// ---------------------------------------------------------------------------------------------
 // THE REFERENCE: a genuinely fresh device, same profile, same world, minutes later. Measured rather
 // than looked up, because the number this is compared against has to describe THIS world.
 // ---------------------------------------------------------------------------------------------
@@ -1433,6 +1568,16 @@ const expectations = {
   /** Every sample carries both clocks, which is what makes a stall diagnosable off-machine. */
   timelineIsStamped: timeline.every((m) => typeof m.at === "number" && typeof m.wall === "string"),
 };
+
+// ROW 3 IS THE ONE THAT ASKS WHETHER A SHORTFALL IS VISIBLE, and it is conditional by construction.
+// The user's injury was not a device that ended short - it was a device that ended short and LOOKED
+// COMPLETE, so nobody knew to retry. The claim is therefore an implication and not a state: if the
+// returned device holds less than the reference, the app must still be saying so, with rows amber.
+// On a run with no shortfall it asserts nothing, which is the honest shape - asserting amber rows
+// unconditionally would fail every clean run and catch nothing.
+if (row.id === "HEAL-REVOKE-3") {
+  expectations.aShortfallWasREPORTEDAndNotHidden = gap.length === 0 || returnedAmber.length > 0;
+}
 
 // Row 8 is the deletion row, so its own subject must have been set up: a deletion that never
 // happened cannot be shown not to come back, and a PASS there would be vacuous.

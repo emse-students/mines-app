@@ -123,10 +123,11 @@ const stage = (s) =>
 // to FAIL on 2026-08-28 with every other expectation of the primitive true.
 //
 // RESOLVED, NOT NAMED - THE NINTH SIGHTING OF THAT DEFECT AND THE FIRST ONE THE GATE COULD NOT SEE.
-// This spawned `login.mjs` as a bare name with no `cwd`, so it resolved against whatever directory
-// the caller happened to be in. From the harness root that works; from `archive/` - which is where
-// every HEAL-REVOKE row runs - it exits 1 with `Module not found "login.mjs"` on a stderr this
-// function discards, and the mint reports `login ok=false`. HEAL-REVOKE-1 recorded `INVALID` on it
+// This spawned `login.mjs` as a bare name with no `cwd`, so it resolved against the CALLER'S
+// working directory - which is what makes it so hard to see. `bun archive/healnew.mjs` from the
+// harness root works, and `cd archive && bun healrevoke.mjs` does not: same tree, same script, and
+// the difference is a `cd`. When it fails it exits 1 with `Module not found "login.mjs"` on a stderr
+// this function discards, and the mint reports `login ok=false`. HEAL-REVOKE-1 recorded `INVALID` on it
 // on 2026-09-05 and the sentence it wrote was about the PRODUCT: "the victim could not be brought
 // to an enrolled starting point". `spawn-selftest.mjs` had forbidden this exact shape since that
 // morning and passed this file every time, because the name is a literal at the CALL SITE and a

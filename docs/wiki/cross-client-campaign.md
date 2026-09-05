@@ -903,6 +903,31 @@ What each of the four is for:
   is green. Its `pending` half is discriminated by PRESENCE: a switched-off device is legitimately
   pending, so those rows are reported as `notCountedAgainstTheProduct` rather than counted.
 
+  **AND THAT PRESENCE PREDICATE WAS MEASURED AGAINST THE POPULATION IT WILL RUN ON, 2026-09-05,
+  BEFORE THE RUNNER WAS WRITTEN - IT REPORTS ZERO.** The local estate holds **73 pending memberships
+  across 42 devices**, the oldest 37 days, and every one of them names a group that still EXISTS and
+  a device that is still ENROLLED - so none is debris by any structural test. Three devices were
+  online at the time of the reading and **not one of them carried a single pending row**. A row
+  asserting "no pending membership past the budget, for a device that is present" would therefore
+  have recorded a `PASS` about nothing at all, on a table holding 73 rows of exactly the shape it
+  exists to find. That is the rule this campaign already carries - *a predicate that named the last
+  incident is not the predicate that names the next one; re-measure it against the population it
+  will actually run on* - and one `GROUP BY` settled it.
+
+  **What the row must do instead, in three parts.** The **placeholder half is unconditional and
+  needs no discriminator**: `userId` or `deviceId` equal to a non-identity literal is a finding
+  whatever the device is doing, it reads the whole table, and it is currently 0 - which is the guard
+  that shipped, holding. The **pending half must report a CENSUS**, bucketed by age and by whether
+  the device is present, so the 73 are visible rather than silently excluded by a predicate that
+  cannot judge them. And the presence-discriminated assertion must record **whether it was vacuous**:
+  if no online device carried any membership at all, that half is `INCONCLUSIVE`, never `PASS` - a
+  rig that cannot ask its question must say so rather than answer it.
+
+  **Which is also why MULTI-8 comes first.** The controlled case - enrol W3 while the peer is
+  offline, then assert THAT membership reaches `active` within the budget - is the only one where
+  the rig owns both ends, so it is the only one that can be non-vacuous on demand. MULTI-10 is the
+  census over everything else, and it is worth exactly what its buckets say.
+
 ## 16 HEAL - what the rows are, and what they cost
 
 Moved off [the board](cross-client-testing.md) on 2026-08-28: it had grown to 280 lines of prose around 44 lines of table, which is the rule of 2026-08-22 broken in one section - a cell is a verdict, a count and a time. Nothing here is state; it is why each row exists.
@@ -1232,8 +1257,12 @@ fresh one ends is a different claim, and it belongs to HEAL-REVOKE-2 and -3.
 **AND THE FIRST RUN WAS `INVALID` FOR A REASON THAT WAS NOT THE PRODUCT'S.** It wrote *"the victim
 could not be brought to an enrolled starting point, so there is nothing to revoke"* - a sentence that
 reads exactly like a product fault. `newdevice.mjs` spawned `login.mjs` by BARE NAME with no `cwd`,
-so every mint driven from `archive/` - which is where every HEAL-REVOKE row runs - exited 1 with
-`Module not found "login.mjs"` on a stderr the helper discarded, and reported `login ok=false`.
+so the name resolved against the CALLER'S working directory. **That is what kept it invisible for as
+long as it did**: `bun archive/healnew.mjs` started from the harness root works, `cd archive && bun
+healrevoke.mjs` does not, and the difference is a `cd` no verdict records - so the primitive had a
+history of successful runs while being broken for anyone who entered the directory first. When it
+fails it exits 1 with `Module not found "login.mjs"` on a stderr the helper discarded, and reports
+`login ok=false`.
 
 **NINTH SIGHTING, AND THE FIRST ONE THE GATE HAD BEEN GREEN FOR.** `spawn-selftest.mjs` exists for
 exactly this defect and forbade *a bare string literal in argv*; this site spawns `[script, ...args]`
