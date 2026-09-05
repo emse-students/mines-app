@@ -232,19 +232,20 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
 [cross-client-testing](docs/wiki/cross-client-testing.md).
 
 1. **ELEVEN RUNGS COMPLETE, 147 OF 246 ROWS ANSWERED** - the board is
-   [cross-client-testing](docs/wiki/cross-client-testing.md) and `bun rows.mjs` settles it against
-   the ledger, and it now adjudicates a row that is a COMPARISON on ALL its halves rather than on
-   the newest. Not `PASS`: TAB-3b, HEAL-NEW-0, HEAL-repair, **HEAL-REVOKE-7 and -8**, and eight rows
-   the phone blocks. **PIN is 7/11, all `PASS`** since 2026-09-05, written from nothing that day;
-   the four that remain are the ones that CHANGE a PIN or restart a browser, which is why they are
-   last.
+   [cross-client-testing](docs/wiki/cross-client-testing.md) and **`bun rows.mjs` settles it**,
+   naming what is not `PASS` and adjudicating a row that is a COMPARISON on ALL its halves. Run it
+   rather than quoting a count from here. PIN's four remaining rows CHANGE a PIN or restart a
+   browser, which is why they are last.
 2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
-3. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
+3. **FIXED, NOT SHIPPED - THREE defects that each cost a rejoining device its history**, found by
+   HEAL-REVOKE-7/-5: `0 of 3 for ever` is now `3 of 3 in ~1 s`. What remains is a DURATION, filed as
+   a P2 ([history-reconciliation](docs/wiki/protocols/history-reconciliation.md), [backlog](docs/wiki/backlog.md)).
+4. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
    2026-09-05, seen on real people). Merged as #383 with the back-gesture hole `dismissible` was
    missing, and asserted by PIN-11 plus two component test files. **It goes from this list the day a
    release carries it** ([backlog](docs/wiki/backlog.md)).
-4. **THE DEPENDENCY CHAIN** (user: *"un projet qui peut 'vivre tout seul'"*) - **ONE merge mechanism
+5. **THE DEPENDENCY CHAIN** (user: *"un projet qui peut 'vivre tout seul'"*) - **ONE merge mechanism
    and ONE arming point since 2026-09-04**, the same four workflows in all four GitHub repos, and
    `bun tools/ecosystem-shape/shape.mjs` is the only thing that asserts it
    ([rebuild](docs/wiki/ecosystem-convergence.md#12-the-cicd-rebuild-2026-09-04---the-same-four-workflows-in-every-repository),
@@ -252,28 +253,26 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    copies). Open: **[the suppression CONTROL CASE the NestJS batch destroyed](docs/wiki/backlog.md#p2---the-nine-nestjs-pull-requests-were-closed-in-one-batch-so-the-suppression-question-was-never-measured-on-one-first-and-monday-2026-09-07-is-the-only-thing-that-can-answer-it-now-updated-2026-09-03)**
    (Monday 2026-09-07 answers it), **nothing tells anybody prod is down**, and
    [host-updates](docs/wiki/infrastructure/host-updates.md).
-5. **NO CAMPAIGN ROW ASKS A QUESTION WHOSE ANSWER IS A POPULATION** - four rows written into rung
+6. **NO CAMPAIGN ROW ASKS A QUESTION WHOSE ANSWER IS A POPULATION** - four rows written into rung
    12 MULTI, needing only `W1 W2` ([campaign](docs/wiki/cross-client-campaign.md)).
-6. **BLOCKED ON HARDWARE** ([table](docs/wiki/backlog.md#owed-a-verification-and-nothing-else),
+7. **BLOCKED ON HARDWARE** ([table](docs/wiki/backlog.md#owed-a-verification-and-nothing-else),
    [procedures](docs/wiki/device-verification.md)). **A precondition is NOT ambient.**
-7. **SIX UX/RENDERING ITEMS + TWO DEV-LOG LINES**, substance in [backlog](docs/wiki/backlog.md) only; four want ONE
+8. **SIX UX/RENDERING ITEMS + TWO DEV-LOG LINES**, substance in [backlog](docs/wiki/backlog.md) only; four want ONE
    pass over `app.css`.
-8. **CALLING IS HELD OFF - `CALLS_ENABLED = false`** (user, 2026-09-01); FIVE switches move in ONE
+9. **CALLING IS HELD OFF - `CALLS_ENABLED = false`** (user, 2026-09-01); FIVE switches move in ONE
    commit at revival ([calls](docs/wiki/frontend/modules/calls.md)). Prod HAS TURN, never used.
-9. **ONE NAMED STARTING POINT FOR EVERY PHASE, STEP AND STEP GROUP** (user, 2026-08-25). Contract
+10. **ONE NAMED STARTING POINT FOR EVERY PHASE, STEP AND STEP GROUP** (user, 2026-08-25). Contract
    and audit in [backlog](docs/wiki/backlog.md).
-10. **P1 - A DEVICE ASKS FOR A WELCOME FOR EVER AND THE MEMBER ANSWERING RESETS THE HEALING ROW** -
-    **FIVE HALVES FIXED 2026-09-04, the fifth made the others unreachable; ONE PROD MEASUREMENT OWED** ([backlog](docs/wiki/backlog.md#p1---a-device-asks-for-a-welcome-for-ever-and-the-member-that-answers-resets-the-row-that-would-have-let-it-heal-itself-measured-on-prod-2026-09-01)); read with its
-    [sibling P2](docs/wiki/backlog.md#p2---a-device-was-given-a-roster-seat-and-never-a-welcome-and-why-its-keypackage-was-skipped-is-unmeasured-measured-on-prod-2026-09-01) and with 11.
-11. **TWELVE MESSAGES DROPPED, PERMANENT COMMIT-LOG HOLE AT EPOCH 121** - the four defects are
-    FIXED AND DEPLOYED (ancestors of `v0.15.0`); only the RESIDUE is open, and the 13:10 failure
-    arm is **NOT established** ([backlog](docs/wiki/backlog.md#p1---twelve-of-sixteen-messages-were-fetched-and-dropped-and-the-commit-log-has-a-permanent-hole-at-epoch-121-measured-on-prod-2026-09-02)).
-12. **`dev.canari-emse.fr` IS THE PRE-RELEASE TARGET**
-    ([dev-environment](docs/wiki/infrastructure/dev-environment.md), the only copy). Two open: a
-    dev deploy cannot tell a broken CHANGE from an unreachable REGISTRY
-    ([backlog](docs/wiki/backlog.md#p2---a-dev-deploy-still-cannot-tell-a-broken-change-from-an-unreachable-registry-and-the-conflation-moved-rather-than-went-away-measured-2026-09-02-first-day-it-ran)); and prod's deploy job is still inlined shell while `deploy-dev`
-    exercises `infrastructure/deploy/deploy-environment.sh`.
-13. **THREE MORE FROM THE USER, 2026-09-05** - a P2 (a COMMUNITY message is not decrypted in a
+11. **P1 - A DEVICE ASKS FOR A WELCOME FOR EVER AND THE MEMBER ANSWERING RESETS THE HEALING ROW** -
+    five halves fixed 2026-09-04, **ONE PROD MEASUREMENT OWED**; read with its sibling P2
+    ([backlog](docs/wiki/backlog.md)).
+12. **TWELVE MESSAGES DROPPED, PERMANENT COMMIT-LOG HOLE AT EPOCH 121** - the four defects shipped
+    in `v0.15.0`'s ancestors; the RESIDUE and the 13:10 arm are open ([backlog](docs/wiki/backlog.md)).
+13. **`dev.canari-emse.fr` IS THE PRE-RELEASE TARGET**
+    ([dev-environment](docs/wiki/infrastructure/dev-environment.md), the only copy). Two open: a dev
+    deploy cannot tell a broken CHANGE from an unreachable REGISTRY, and prod's deploy job is still
+    inlined shell where `deploy-dev` exercises the script ([backlog](docs/wiki/backlog.md)).
+14. **THREE MORE FROM THE USER, 2026-09-05** - a P2 (a COMMUNITY message is not decrypted in a
     background notification, and the KILLED case is unmeasured for both kinds), a QUESTION (does a
     community invitation notify somebody with no prior conversation?), and one post-campaign direction
     (ICM/ISMIN: two schools, sharing only admin and messaging). All three in
