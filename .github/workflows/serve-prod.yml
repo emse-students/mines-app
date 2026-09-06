@@ -1,71 +1,51 @@
-name: Deploy an estate
+name: Serve the production estate
 
-# ONE TRIGGER, AND THAT IS THE WHOLE DESIGN (user, 2026-09-02: *"Le deploiement (production,
-# android, ios...) se fait au bump. Pas au push sur main."*).
+# CALLED BY `release.yml` WHEN THE RELEASE IS STABLE AND BOTH STORES TOOK THE VERSION, AND BY
+# NOTHING ELSE.
 #
-# A push to `main` used to deploy production. It does not any more, and neither does a manual
-# dispatch - a dispatch would simply be a second door, and the point of this file is that there is
-# exactly one. Retrying a half-failed deploy is "Re-run failed jobs" on the run that already exists.
+# ONE ESTATE, ONE FILE, NO PHASE (2026-09-07). This job used to live in `deploy.yml` behind
+# `inputs.phase == 'production' && inputs.prerelease == 'false'`, in a file called twice - so on
+# every build call it was drawn as an impossible skipped row, and on the production call the file's
+# three build jobs were drawn the same way. See `build.yml` for the measurement.
 #
-# WHAT REPLACED THE PUSH, and why it is the same door for both estates: publishing a GitHub Release
-# runs `Bump version on release`, which writes the version into every manifest and pushes that
-# commit to `main`; this workflow starts when that run completes. The RELEASE decides which estate
-# is deployed - a pre-release (`v0.15.0-alpha.1`) deploys `dev.canari-emse.fr` and feeds the store
-# tester programmes, a stable release (`v0.15.0`) deploys production. Nothing else deploys anything.
+# WHY THE WEB WAITS FOR THE STORES, WHICH IS THE ONE INVARIANT THIS FILE EXISTS BEHIND (user,
+# 2026-09-03: *"j'aimerais que toutes les versions soient toujours alignees"*). Store AVAILABILITY
+# is never simultaneous - Apple reviews in days, Play rolls out in hours - so "aligned" cannot mean
+# "live at the same instant". What CAN be guaranteed is the useful half: **the web never serves a
+# version a store REFUSED.** That is expressed where it belongs, as `needs: [build, android, ios]`
+# on the caller's job, because a called workflow cannot depend on a job of its caller.
 #
-# THE `branches:` FILTER THAT MUST NOT COME BACK: a release-triggered run has the TAG as its head
-# branch, not `main`, so a `branches: [main]` filter here silently drops every release. That bit
-# every release up to v0.10.4 - post-release CD never fired once.
+# AND SINCE 2026-09-07 IT MEANS WHAT IT SAYS. `ios.yml`'s submission step used to fail the whole
+# arm when Apple's single version slot was merely BUSY - the expected outcome of releasing faster
+# than Apple reviews - so a full queue skipped this deploy three times running (v0.16.2, v0.16.3,
+# v0.16.4) and production sat on v0.16.1 for three days while two releases reported themselves
+# shipped. A refusal and a queue now leave `tools/app-store/submit.mjs` by different exit codes, so
+# this dependency refuses only what a store actually refused.
 #
-# `Dependabot auto-merge` is deliberately NOT listed: it completes on every sweep, including the
-# ones where it DECLINES to merge, and this workflow would then deploy for nothing. A dependency
-# update reaches production when the next release is published, like everything else.
-# CALLED BY `release.yml`, AND BY NOTHING ELSE. It used to listen for the bump run's completion on
-# its own, which is what made three separate workflows each re-derive the same three facts and each
-# resolve `main` for itself. The orchestrator now decides once and hands the answers down, so this
-# file is a library: it deploys the commit it is given, to the estate it is told.
+# THE COST IS ~14 MINUTES AND ONLY PRODUCTION PAYS IT, measured on `v0.16.1-alpha.1`: the two
+# mobile arms are the wall and everything else finishes inside their shadow. The dev estate is
+# deliberately NOT behind them - dev is where somebody looks first, and an alpha has no production
+# estate to get ahead of.
+#
+# THERE IS NO CI CONDITION HERE either: `release.yml` gates the whole run on `CI passed` being green
+# on the very commit these artefacts were built from.
 on:
   workflow_call:
     inputs:
       sha:
-        description: 'The exact commit to build and deploy - resolved ONCE by the caller'
+        description: 'The exact commit this estate is put on - resolved ONCE by the caller'
         required: true
         type: string
       version:
         description: 'The version the bump wrote into the manifests'
         required: true
         type: string
-      prerelease:
-        description: 'The string "true" or "false". A hyphen in the version IS the definition, and
-          the caller has already read it - this file never decides its own target.'
-        required: true
-        type: string
-      phase:
-        description: 'Which half of this file to run: `build` (the images, and the dev estate) or
-          `production`. See the two-call comment in `release.yml` - the caller runs `build`
-          immediately and `production` only once Google Play and the App Store have accepted the
-          same version.'
+      services_args:
+        description: 'The services to pull and recreate, computed by `build.yml` from what it
+          actually built. Handed down rather than re-derived.'
         required: true
         type: string
 
-# TWO DEPLOYS OF THE SAME ESTATE MUST NOT OVERLAP, and until 2026-09-02 nothing said so. Three runs
-# were in flight against `/home/canari/canari` at once, each able to `git reset --hard` and
-# `docker compose up` while another was mid-flight; `scheduled.yml`'s `dev-refresh` job
-# both serialise themselves, and the workflow that actually touches production did not. It does not
-# take a burst of human pushes either. The dev arm doubles the exposure, `/home/canari/canari-dev`
-# being a second checkout two runs would race on identically, which is why ONE group covers both
-# estates: they live on one machine, and two releases published minutes apart - one alpha, one
-# stable - would otherwise deploy over each other.
-#
-# `cancel-in-progress: false` because cancelling a deploy halfway leaves the estate in whatever state
-# the kill found - containers half-recreated, the checkout reset to a commit whose images never got
-# pulled. Queueing behind it is the only safe answer.
-#
-# WHAT MAKES A CANCELLED PENDING RUN HARMLESS, which is the non-obvious half: GitHub keeps at most
-# one run waiting per group and cancels the rest while they are still pending. That would lose work
-# if `enumerate-services` measured against the previous RUN - but it measures against the
-# previous RELEASE of the same kind, which is what the target estate actually received, so the
-# surviving run rebuilds everything the dropped ones would have.
 concurrency:
   group: cd-deploy
   cancel-in-progress: false
@@ -75,572 +55,8 @@ env:
   IMAGE_PREFIX: ${{ github.repository }}
   DOMAIN: canari-emse.fr
   DEPLOY_PATH: /home/canari/canari
-  # The second estate, on the SAME machine. A separate checkout because two estates sharing one
-  # working tree would race - a `git reset --hard` for one rewrites the compose file the other is
-  # being deployed from - and a separate compose project (`canari-dev`, declared in the file itself)
-  # because that is what gives it its own network and its own volumes.
-  DEV_DOMAIN: dev.canari-emse.fr
-  DEV_DEPLOY_PATH: /home/canari/canari-dev
 
 jobs:
-  # THE DECISION IS MADE ONCE, IN `release.yml`, AND HANDED DOWN.
-  #
-  # A `release-kind` job used to live here: it checked out `main`, read the version back off the
-  # bumped manifest and published it as outputs, because a `workflow_run` carries neither
-  # `release.prerelease` nor a usable branch. That reasoning was right and it is now the
-  # orchestrator's, one level up, where the bump that WROTE the manifest can read it without a
-  # second checkout - and where the two store chains read the same answer instead of each
-  # deriving its own. `inputs.sha` is therefore the one commit this whole run builds.
-
-  enumerate-services:
-    name: Enumerate the services to build
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.detect.outputs.matrix }}
-      services_csv: ${{ steps.detect.outputs.services_csv }}
-      services_args: ${{ steps.detect.outputs.services_args }}
-      any_changed: ${{ steps.detect.outputs.any_changed }}
-      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
-    steps:
-      # NO CHECKOUT, NO HISTORY, NO TOKEN - all three existed for the diff that was deleted on
-      # 2026-09-03. This job reads no file and calls no API: the service list and the dockerfile
-      # map are inline below, and a `fetch-depth: 0` was a full clone of the repository, on every
-      # release, to answer a question nobody asks any more.
-      - name: Name every service, and the dockerfile that builds it
-        id: detect
-        run: |
-          set -euo pipefail
-
-          declare -A SERVICE_DOCKERFILE=(
-            [core-service]="./infrastructure/local/Dockerfile.core-service"
-            [social-service]="./infrastructure/local/Dockerfile.social-service"
-            [chat-gateway]="./infrastructure/local/Dockerfile.chat-gateway"
-            [call-service]="./infrastructure/local/Dockerfile.call-service"
-            [chat-delivery-service]="./infrastructure/local/Dockerfile.chat-delivery-service"
-            [frontend]="./infrastructure/local/Dockerfile.frontend"
-            [frontend-ssr]="./infrastructure/local/Dockerfile.frontend-ssr"
-            [media-service]="./infrastructure/local/Dockerfile.media-service"
-          )
-
-          ALL_SERVICES=(
-            core-service
-            social-service
-            chat-gateway
-            call-service
-            chat-delivery-service
-            frontend
-            frontend-ssr
-            media-service
-          )
-
-          # EVERY SERVICE, EVERY RELEASE - THE DIFF WAS DELETED ON 2026-09-03 (user: *"On pourrait
-          # retirer ce qui est du detect changed services pour tout recompiler, de toute facon ce
-          # qui prend du temps c'est android et iOS"*).
-          #
-          # MEASURED ON `v0.16.1-alpha.1`, which is what settles it rather than the argument:
-          #
-          #     14min  Android                    }
-          #     14min  iOS                        } concurrent
-          #      4min  the slowest docker image   } all concurrent, and therefore entirely
-          #      2min  the frontend build         } inside the 14-minute shadow
-          #      1min  the dev deploy
-          #      0min  this job
-          #
-          # The detection saved nothing a release actually waits for. What it COST was a second
-          # thing that had to be right: a baseline resolved from the previous release of the same
-          # kind, a `git diff` against it, and a hand-written mapping from changed path to service -
-          # a mapping that omits a service silently, and then ships a stale image with nothing
-          # saying so. An optimisation whose failure mode is invisible, buying zero wall clock.
-          #
-          # AND IT WAS LOAD-BEARING FOR THE CONCURRENCY PROPERTY, which is why deleting it is a
-          # simplification and not a loss. This workflow QUEUES rather than cancels, and GitHub
-          # keeps at most one waiting run per group and drops the rest; what made those dropped runs
-          # harmless was precisely that this job measured against the previous RELEASE rather than
-          # the previous RUN, so the survivor rebuilt everything they would have. Building
-          # everything makes that property trivially true instead of true-by-argument.
-          #
-          # WHAT IS KEPT IS THE LIST AND THE DOCKERFILE MAP, because they exist nowhere else and
-          # `tests/compose-wiring.test.sh` reads the compose file for the other half of the same
-          # question.
-          # `any_changed` and `frontend_changed` are CONSTANTS now. They are kept rather than
-          # deleted because every gate on the production deploy reads them, and removing them
-          # means touching those gates - the same surgery as making production wait for the
-          # store arms. Those go together, in one change, or not at all.
-
-          MATRIX_ITEMS=""
-          FRONTEND_CHANGED="false"
-          for service in "${ALL_SERVICES[@]}"; do
-            dockerfile="${SERVICE_DOCKERFILE[$service]}"
-            MATRIX_ITEMS+="{\"name\":\"$service\",\"context\":\".\",\"dockerfile\":\"$dockerfile\"},"
-            case "$service" in
-              frontend|frontend-ssr) FRONTEND_CHANGED="true" ;;
-            esac
-          done
-          MATRIX_ITEMS="${MATRIX_ITEMS%,}"
-          MATRIX="{\"include\":[${MATRIX_ITEMS}]}"
-          SERVICES_CSV="$(IFS=,; echo "${ALL_SERVICES[*]}")"
-          SERVICES_ARGS="$(IFS=' '; echo "${ALL_SERVICES[*]}")"
-          ANY_CHANGED="true"
-          echo "Services selected for image rebuild: ${SERVICES_ARGS}"
-
-          {
-            echo "matrix=$MATRIX"
-            echo "services_csv=$SERVICES_CSV"
-            echo "services_args=$SERVICES_ARGS"
-            echo "any_changed=$ANY_CHANGED"
-            echo "frontend_changed=$FRONTEND_CHANGED"
-          } >> "$GITHUB_OUTPUT"
-
-  # ONE FRONTEND BUILD, WHOSE ENVIRONMENT IS CHOSEN BY THE RELEASE.
-  #
-  # There used to be two of these jobs, identical but for their secrets, because one CD run deployed
-  # both estates. A run now deploys exactly one - a pre-release goes to dev, a stable to production -
-  # so the second job had nothing left to be. The duplication was never harmless: the two drifted,
-  # and the dev copy is where the `VITE_DEPLOY_ENVIRONMENT` banner lived while nothing said so.
-  #
-  # THE BUILD CANNOT BE RE-TAGGED FROM ONE ESTATE TO THE OTHER, which is why the environment has to
-  # be decided here and not at deploy time: SvelteKit inlines `import.meta.env.*` at build time, so
-  # the API origins, the Authentik client id and the banner are baked into the bundle. Shipping
-  # production's image to dev would point dev's browser at production.
-  build-frontend:
-    name: Build Frontend
-    needs: enumerate-services
-    # `phase == 'build'` HERE AND ON THE NEXT TWO JOBS, `production` ON THE LAST ONE. This file is
-    # called TWICE per stable release, and each call runs one half; the images are pushed to GHCR by
-    # the first call, so the second has nothing left to build and only has to deploy what is already
-    # in the registry.
-    if: inputs.phase == 'build' && needs.enumerate-services.outputs.frontend_changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          # Pinned via `.bun-version`, the one place this repo names a bun. It must never be
-          # "latest": that resolves through api.github.com/repos/oven-sh/bun/git/refs/tags and can
-          # 401 with GITHUB_TOKEN. The version itself is free to be the newest bun - what must NOT
-          # change is the LOCKFILE version, which `Guard the bun lockfile version` in
-          # `code-analysis.yml` enforces directly. See `ecosystem-convergence.md` section 10.
-          bun-version-file: ".bun-version"
-
-      - name: Cache Bun dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            frontend/node_modules
-            ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: |
-          bun install --frozen-lockfile
-          bunx svelte-kit sync
-
-      - name: Build MLS WASM
-        uses: ./.github/actions/build-mls-wasm
-
-      - name: Generate protobuf bindings
-        working-directory: frontend
-        run: bun run proto:gen
-
-      # THE THREE SECRETS NEITHER ESTATE CAN BE BUILT WITHOUT, taken from the set the release
-      # selects. A missing one would otherwise produce a bundle whose every API origin is the empty
-      # string, which builds fine and then fails in a browser with no server-side trace.
-      #
-      # THERE IS NO FALLBACK BETWEEN THE TWO SETS, deliberately. Falling back from `DEV_BASE_URL` to
-      # `BASE_URL` would build a pre-release pointing at PRODUCTION and hand it to the store tester
-      # programmes - precisely the accident the second environment exists to prevent. A missing
-      # secret stops the release instead.
-      - name: Validate the frontend build secrets
-        env:
-          IS_PRERELEASE: ${{ inputs.prerelease }}
-          BASE_URL: ${{ secrets.BASE_URL }}
-          AUTHENTIK_URL: ${{ secrets.AUTHENTIK_URL }}
-          AUTHENTIK_CLIENT_ID: ${{ secrets.AUTHENTIK_CLIENT_ID }}
-          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
-          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
-          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
-        run: |
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            required="DEV_BASE_URL DEV_AUTHENTIK_URL DEV_AUTHENTIK_CLIENT_ID"
-          else
-            required="BASE_URL AUTHENTIK_URL AUTHENTIK_CLIENT_ID"
-          fi
-          missing=0
-          for name in $required; do
-            if [ -z "${!name}" ]; then
-              echo "::error::$name is not set, and this build needs it. There is no fallback to the other environment's secrets - that would point this build at the wrong estate."
-              missing=1
-            fi
-          done
-          [ "$missing" -eq 0 ]
-
-      - name: Create frontend .env
-        working-directory: frontend
-        env:
-          IS_PRERELEASE: ${{ inputs.prerelease }}
-          BASE_URL: ${{ secrets.BASE_URL }}
-          AUTHENTIK_URL: ${{ secrets.AUTHENTIK_URL }}
-          AUTHENTIK_CLIENT_ID: ${{ secrets.AUTHENTIK_CLIENT_ID }}
-          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
-          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
-          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
-          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUB_KEY }}
-          ANDROID_APP_LINK_SHA256: ${{ secrets.ANDROID_APP_LINK_SHA256 }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
-          EXPECTED_PROD_DOMAIN: ${{ env.DOMAIN }}
-          EXPECTED_DEV_DOMAIN: ${{ env.DEV_DOMAIN }}
-        run: |
-          set -euo pipefail
-
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            APP_URL="$DEV_BASE_URL"
-            IDP_URL="$DEV_AUTHENTIK_URL"
-            IDP_CLIENT="$DEV_AUTHENTIK_CLIENT_ID"
-          else
-            APP_URL="$BASE_URL"
-            IDP_URL="$AUTHENTIK_URL"
-            IDP_CLIENT="$AUTHENTIK_CLIENT_ID"
-          fi
-
-          # THE ONE PLACE IN THIS CHANTIER WHERE A MISTAKE SHIPS TO PHONES, so it is an ASSERTION
-          # and never a convention. A store build carries its backend origin baked in and cannot be
-          # re-pointed afterwards: an alpha built against production would let the tester programme
-          # write to real data, and a stable built against dev would point every user at a box that
-          # is wiped every Monday. Neither failure is visible in a green pipeline. The secrets are
-          # selected by the release just above, so the only way to reach here wrong is a secret that
-          # holds the other environment's URL - which is exactly what this catches.
-          case "$APP_URL" in
-            *"$EXPECTED_DEV_DOMAIN"*) URL_ENVIRONMENT=dev ;;
-            *"$EXPECTED_PROD_DOMAIN"*) URL_ENVIRONMENT=production ;;
-            *) URL_ENVIRONMENT=unknown ;;
-          esac
-          if [ "$IS_PRERELEASE" = "true" ] && [ "$URL_ENVIRONMENT" != "dev" ]; then
-            echo "::error::This is a PRE-RELEASE but its backend URL is not ${EXPECTED_DEV_DOMAIN} (resolved: ${URL_ENVIRONMENT}). Refusing to build an alpha pointing anywhere else."
-            exit 1
-          fi
-          if [ "$IS_PRERELEASE" != "true" ] && [ "$URL_ENVIRONMENT" != "production" ]; then
-            echo "::error::This is a STABLE release but its backend URL is not ${EXPECTED_PROD_DOMAIN} (resolved: ${URL_ENVIRONMENT}). Refusing to build a production release pointing anywhere else."
-            exit 1
-          fi
-          echo "Building the ${URL_ENVIRONMENT} frontend against ${APP_URL}"
-
-          # Every URL is the estate's own origin; nginx routes /ws, /api/ and /media/ on that host.
-          echo "VITE_FRONTEND_URL=${APP_URL}" >> .env
-          echo "VITE_GATEWAY_URL=${APP_URL}" >> .env
-          echo "VITE_CALL_URL=${APP_URL}" >> .env
-          echo "VITE_DELIVERY_URL=${APP_URL}" >> .env
-          echo "VITE_MEDIA_URL=${APP_URL}" >> .env
-          echo "VITE_SOCIAL_URL=${APP_URL}" >> .env
-          echo "VITE_CORE_URL=${APP_URL}" >> .env
-          echo "VITE_AUTHENTIK_URL=${IDP_URL}" >> .env
-          echo "VITE_AUTHENTIK_CLIENT_ID=${IDP_CLIENT}" >> .env
-
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            # WHAT RAISES THE PERMANENT "test environment" BANNER. `deployEnvironment()` treats
-            # UNSET as production on purpose, so forgetting this line costs dev its banner - visible
-            # to whoever is looking at it - rather than putting a banner on production.
-            echo "VITE_DEPLOY_ENVIRONMENT=development" >> .env
-
-            # NO VITE_STRIPE_PUBLISHABLE_KEY on dev. It has no payment credentials at all (decided
-            # with the user), and a publishable key whose secret half is absent produces a checkout
-            # that opens and then fails - worse than a button that is not there.
-          elif [ -n "$STRIPE_PUBLISHABLE_KEY" ]; then
-            echo "VITE_STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}" >> .env
-          fi
-
-          if [ -n "$ANDROID_APP_LINK_SHA256" ]; then
-            echo "VITE_ANDROID_APP_LINK_SHA256=${ANDROID_APP_LINK_SHA256}" >> .env
-          fi
-          if [ -n "$APPLE_TEAM_ID" ]; then
-            echo "VITE_APPLE_TEAM_ID=${APPLE_TEAM_ID}" >> .env
-          fi
-          # In-app GIF picker (KLIPY). Optional - the GIF button is hidden when unset.
-          if [ -n "$KLIPY_API_KEY" ]; then
-            echo "VITE_KLIPY_KEY=${KLIPY_API_KEY}" >> .env
-          fi
-
-      - name: Build frontend
-        working-directory: frontend
-        # BUILD_WEB selects adapter-node over adapter-static (svelte.config.js). The web deploy
-        # needs a server so each page's <head> can be written before it is sent; the Tauri
-        # release workflows build without it and keep the static SPA output.
-        env:
-          BUILD_WEB: '1'
-        run: bun run build
-
-      - name: Upload frontend build artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: frontend-build
-          path: frontend/build/
-          # Sans cette option, upload-artifact exclut les dotfiles : le dossier
-          # build/.well-known/ (assetlinks.json + apple-app-site-association)
-          # serait absent de l'image nginx -> 404 sur les App Links.
-          include-hidden-files: true
-          retention-days: 7
-
-  build-docker-images:
-    name: Build & Push Docker Images
-    runs-on: ubuntu-latest
-    needs: [enumerate-services, build-frontend]
-    if: |
-      always() &&
-      inputs.phase == 'build' &&
-      needs.enumerate-services.result == 'success' &&
-      needs.enumerate-services.outputs.any_changed == 'true' &&
-      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped')
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      # One image's failure must NOT cancel its siblings. With the default fail-fast, a frontend
-      # build that failed on 11 August cancelled the media-service build sitting next to it - and
-      # because the detector below only looks at what the CURRENT push changed, no later run ever
-      # revisited it. `POST /api/media/touch` answered 404 in production for a day: the retention
-      # clock the endpoint exists to extend was silently dead, on a service whose own build was fine.
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.enumerate-services.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.sha }}
-
-      - name: Download frontend build artifact
-        # Both frontend images come from the one adapter-node artifact: nginx serves
-        # build/client + build/prerendered, the SSR image runs the server beside it.
-        if: matrix.name == 'frontend' || matrix.name == 'frontend-ssr'
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-build
-          path: frontend/build/
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # THE IMMUTABLE TAG IS THE COMMIT, AND THE MOVING TAG SAYS WHICH ESTATE MAY PULL IT.
-      #
-      # `type=ref,event=branch` and `type=sha,prefix={{branch}}-` are gone with the push trigger:
-      # there is no branch event any more, and both produced tags nothing ever pulled.
-      #
-      # `latest` MOVES ONLY FOR A STABLE RELEASE, and `dev` only for a pre-release. Both compose
-      # files are deployed with an explicit `TAG=<sha>`, so neither moving tag decides what runs -
-      # but `latest` is what a human typing `docker pull` gets, and letting an alpha claim it would
-      # make that person's answer to "what is production running" quietly wrong. `enable=` takes a
-      # literal true/false, which is why the release kind is threaded in rather than inferred from
-      # the default branch (every release commit is on the default branch, alpha and stable alike,
-      # so `{{is_default_branch}}` could not tell them apart).
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
-          tags: |
-            type=raw,value=${{ inputs.sha }}
-            type=raw,value=v${{ inputs.version }}
-            type=raw,value=latest,enable=${{ inputs.prerelease == 'false' }}
-            type=raw,value=dev,enable=${{ inputs.prerelease == 'true' }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,ignore-error=true
-          cache-to: type=gha,mode=min,ignore-error=true
-
-  # ════════════════════════════════════════════════════════════════════════════════════════════
-  # THE DEV ESTATE - dev.canari-emse.fr, WHICH IS NOW THE PRE-RELEASE TARGET
-  #
-  # ONE JOB, NOT THREE. `build-frontend-dev` and `build-frontend-images-dev` were deleted on
-  # 2026-09-03: a CD run deploys exactly ONE estate now, so the frontend build above already builds
-  # the right bundle and tags the right images. The two near-identical jobs existed only because a
-  # single push used to deploy both estates at once, and they had already drifted apart.
-  #
-  # WHAT DEV IS FOR SINCE THE MIGRATION (user, 2026-09-02). It is no longer a rehearsal stage that
-  # every change passes through - development is LOCAL now - it is where a `X.X.X-alpha.N`
-  # pre-release lands, and what the Play internal track and the TestFlight internal group point at.
-  # `scheduled.yml`'s `dev-refresh` job keeps feeding it a copy of production every Monday, so an alpha still meets
-  # production-shaped data.
-  #
-  # THE GATE IS A REPOSITORY VARIABLE, NOT A SECRET. `vars.DEV_ENVIRONMENT_ENABLED` unset means this
-  # job skips and a pre-release deploys nothing. It is a `vars` and not a `secrets` entry so its
-  # value is visible in the run log: whether a second estate is being deployed is not a secret, and
-  # a silent gate is one nobody can debug.
-  #
-  # WHAT IS DELIBERATELY NOT HERE: no Stripe (dev has no payment credentials at all), and no
-  # separate BACKEND images - both estates deploy the same image by its commit sha, which is why
-  # `docker-compose.dev.yml` pins `TAG` exactly as production's does.
-  # ════════════════════════════════════════════════════════════════════════════════════════════
-
-  deploy-dev:
-    name: Deploy to dev.canari-emse.fr
-    runs-on: self-hosted
-    needs: [enumerate-services, build-frontend, build-docker-images]
-    # `build-frontend` IS IN THIS LIST BECAUSE ITS FAILURE WAS LAUNDERED INTO A SKIP, measured
-    # 2026-09-02. A `skipped` image job means "the frontend did not change, the existing images
-    # stand" - but it ALSO means "the build that feeds me failed", because a job whose dependency
-    # fails is reported skipped, not failed. Accepting the skip without asking WHY, this job once
-    # deployed an estate referencing `frontend-ssr:dev`, an image that had never been pushed, and
-    # the pull failed at the registry instead of at a gate. A status that cannot tell a refusal from
-    # a failure to run must not be the only thing consulted: the builder's own result is.
-    if: |
-      always() &&
-      inputs.phase == 'build' &&
-      vars.DEV_ENVIRONMENT_ENABLED == 'true' &&
-      inputs.prerelease == 'true' &&
-      needs.enumerate-services.result == 'success' &&
-      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
-      (needs.build-docker-images.result == 'success' || needs.build-docker-images.result == 'skipped')
-    permissions:
-      contents: write
-      packages: read
-    environment:
-      name: development
-      url: https://${{ env.DEV_DOMAIN }}
-    steps:
-      # ONE NAMED STARTING POINT, whatever happened before. The dev estate has its OWN checkout,
-      # separate from production's, because two estates sharing one working tree would race: a
-      # `git reset --hard` for one rewrites the compose file the other is being deployed from. The
-      # clone is done here rather than by hand so the state is reproducible - a directory somebody
-      # created once, differently, is exactly the inherited state this repository keeps paying for.
-      - name: Ensure the dev checkout exists and is at this commit
-        run: |
-          set -euo pipefail
-          if [ ! -d "$DEV_DEPLOY_PATH/.git" ]; then
-            echo "no dev checkout at $DEV_DEPLOY_PATH - cloning"
-            rm -rf "$DEV_DEPLOY_PATH"
-            git clone --no-checkout \
-              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
-              "$DEV_DEPLOY_PATH"
-          fi
-          cd "$DEV_DEPLOY_PATH"
-          git remote set-url origin \
-            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
-          git fetch origin main
-          git reset --hard origin/main
-          echo "dev checkout at $(git rev-parse --short HEAD)"
-
-      # Renders infrastructure/.env for the dev estate and NOTHING ELSE, from the DEV_ secrets only.
-      # The list is the manifest's own `secret:` rows that dev does not skip; a row added there and
-      # not here is caught by `.github/scripts/tests/deploy-env.test.sh`, which derives this block.
-      #
-      # IT RUNS BEFORE ANY CONTAINER IS TOUCHED, and refuses to write a partial file: a missing
-      # required secret fails here, with the previous dev deployment still up.
-      - name: Render the dev environment
-        working-directory: ${{ env.DEV_DEPLOY_PATH }}
-        env:
-          DEV_JWT_SECRET: ${{ secrets.DEV_JWT_SECRET }}
-          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
-          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
-          DEV_AUTHENTIK_CLIENT_SECRET: ${{ secrets.DEV_AUTHENTIK_CLIENT_SECRET }}
-          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
-          DEV_POSTGRES_USER: ${{ secrets.DEV_POSTGRES_USER }}
-          DEV_POSTGRES_PASSWORD: ${{ secrets.DEV_POSTGRES_PASSWORD }}
-          DEV_GARAGE_RPC_SECRET: ${{ secrets.DEV_GARAGE_RPC_SECRET }}
-          DEV_GARAGE_ADMIN_TOKEN: ${{ secrets.DEV_GARAGE_ADMIN_TOKEN }}
-          DEV_GARAGE_ACCESS_KEY_ID: ${{ secrets.DEV_GARAGE_ACCESS_KEY_ID }}
-          DEV_GARAGE_SECRET_ACCESS_KEY: ${{ secrets.DEV_GARAGE_SECRET_ACCESS_KEY }}
-          DEV_CHANNELS_ENCRYPTION_SECRET: ${{ secrets.DEV_CHANNELS_ENCRYPTION_SECRET }}
-          DEV_INTERNAL_SHARED_SECRET: ${{ secrets.DEV_INTERNAL_SHARED_SECRET }}
-          DEV_CALL_ROOM_SECRET: ${{ secrets.DEV_CALL_ROOM_SECRET }}
-          DEV_INTERNAL_SECRET: ${{ secrets.DEV_INTERNAL_SECRET }}
-          DEV_EXTERNAL_API_KEY: ${{ secrets.DEV_EXTERNAL_API_KEY }}
-          DEV_SKY_API_KEY: ${{ secrets.DEV_SKY_API_KEY }}
-          DEV_FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.DEV_FIREBASE_SERVICE_ACCOUNT_JSON }}
-          DEV_CLOUDFLARE_CALLS_API_TOKEN: ${{ secrets.DEV_CLOUDFLARE_CALLS_API_TOKEN }}
-          DEV_CLOUDFLARE_TURN_KEY_ID: ${{ secrets.DEV_CLOUDFLARE_TURN_KEY_ID }}
-          DEV_MIGALLERY_API_KEY: ${{ secrets.DEV_MIGALLERY_API_KEY }}
-          DEV_GOOGLE_SAFE_BROWSING_API_KEY: ${{ secrets.DEV_GOOGLE_SAFE_BROWSING_API_KEY }}
-          DEV_SERVICE_ACCOUNT_USER_ID: ${{ secrets.DEV_SERVICE_ACCOUNT_USER_ID }}
-          # Push, iOS half. Available on dev on purpose: what stops a test notification reaching a
-          # real member is the copy's `TRUNCATE TABLE push_token`, not an absent key, so a dev estate
-          # can only reach a phone that has itself signed into dev. Absent, iOS falls back to an FCM
-          # banner and the deploy says so.
-          DEV_APNS_VOIP_KEY_P8: ${{ secrets.DEV_APNS_VOIP_KEY_P8 }}
-          DEV_APNS_VOIP_KEY_ID: ${{ secrets.DEV_APNS_VOIP_KEY_ID }}
-          DEV_APNS_VOIP_TEAM_ID: ${{ secrets.DEV_APNS_VOIP_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          bash infrastructure/deploy/render-env.sh \
-            --environment dev \
-            --domain "${{ env.DOMAIN }}" \
-            --build "dev.$(git rev-parse --short=7 HEAD)" \
-            --out infrastructure/.env
-
-          # THE THREE HOST PORTS ARE NOT WRITTEN HERE ANY MORE, and the reason is worth keeping.
-          # They used to be, in the shape `grep -q '^KEY=' .env || echo KEY=<dev value>`, and that
-          # never fired once: render-env.sh builds .env from `infrastructure/.env.example`, which
-          # DECLARES all three at production's numbers. The key was never absent, so the dev override
-          # was never applied and dev's .env asked for production's port 8080. They are `computed`
-          # manifest rows now, upserted by render-env.sh, so one place decides per environment.
-
-      # `dev` IS DEV'S MOVING TAG, FOR EVERY SERVICE AND NOT JUST THE TWO FRONTENDS. It used to be
-      # `TAG=latest` for the shared backends and `FRONTEND_TAG=dev` for the frontends, which worked
-      # only while one push deployed both estates from one commit. A pre-release and a stable are
-      # different commits now, so `latest` belongs to production alone and dev reads `dev`.
-      #
-      # A MOVING TAG AND NOT THE SHA, because the compose file resolves a tag for EVERY service and
-      # this release built only the ones that changed. `dev` resolves for all of them, each pointing
-      # at the last pre-release that touched it - which is exactly what a selective rebuild means.
-      #
-      # `--pull-services` carries the services the detector saw change; the two frontends are added
-      # unconditionally when their build ran, because a release always rebuilds them.
-      - name: Deploy the dev estate
-        working-directory: ${{ env.DEV_DEPLOY_PATH }}
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ github.token }}
-          FRONTEND_TAG: dev
-          CHANGED_SERVICES: ${{ needs.enumerate-services.outputs.services_args }}
-          FRONTEND_IMAGES_BUILT: ${{ needs.build-docker-images.result }}
-        run: |
-          set -euo pipefail
-          pull="$CHANGED_SERVICES"
-          if [ "$FRONTEND_IMAGES_BUILT" = "success" ]; then
-            case " $pull " in
-            *" frontend "*) ;;
-            *) pull="$pull frontend frontend-ssr" ;;
-            esac
-          fi
-          bash infrastructure/deploy/deploy-environment.sh \
-            --environment dev \
-            --path "${{ env.DEV_DEPLOY_PATH }}" \
-            --tag dev \
-            --registry "${{ env.REGISTRY }}" \
-            --image-prefix "${{ env.IMAGE_PREFIX }}" \
-            --pull-services "$pull"
-
-      # WHAT THE DEV ESTATE IS RUNNING, recorded where a human can read it. This is not the change
-      # detector's input any more - that is the previous RELEASE now - so the tag exists only to
-      # answer the question the estate itself cannot.
-      - name: Record the deployed commit
-        if: success()
-        run: |
-          set -euo pipefail
-          git -C "${{ env.DEV_DEPLOY_PATH }}" tag -f dev-deployed "${{ inputs.sha }}"
-          git -C "${{ env.DEV_DEPLOY_PATH }}" push -f \
-            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
-            refs/tags/dev-deployed
-          echo "dev-deployed -> ${{ inputs.sha }} (v${{ inputs.version }})"
-
   # -----------------------------------------------------------------------------------------------
   # THE PROMOTION JOB IS GONE, AND SO IS THE BRANCH IT PROMOTED
   # -----------------------------------------------------------------------------------------------
@@ -663,42 +79,6 @@ jobs:
   deploy-to-server:
     name: Deploy to Production Server
     runs-on: self-hosted
-    needs: [enumerate-services, build-frontend, build-docker-images]
-    # A STABLE RELEASE, AND NOTHING ELSE, REACHES THIS JOB, and since 2026-09-04 only after BOTH
-    # STORES HAVE ACCEPTED THE SAME VERSION. `prerelease == 'false'` says the first half; the second
-    # half is not expressible here, because a called workflow cannot depend on a job of its caller -
-    # it is `release.yml`'s `production` job, which needs `[android, ios]` and calls this file a
-    # second time with `phase: production`.
-    #
-    # WHY THE WEB WAITS FOR THE STORES (user, 2026-09-03: *"j'aimerais que toutes les versions soient
-    # toujours alignees"*). Store AVAILABILITY is never simultaneous - Apple reviews in days, Play
-    # rolls out in hours - so "aligned" cannot mean "live at the same instant", and pretending
-    # otherwise would be a promise this file cannot keep. What it CAN guarantee is the useful half:
-    # **the web never serves a version a store refused.** A build that fails to sign, an `.aab` Play
-    # rejects, an App Store submission answered with a 409 - each now stops production instead of
-    # leaving the web a version ahead of every phone.
-    #
-    # THE COST IS ~14 MINUTES AND IT IS PAID ONLY BY PRODUCTION, measured on `v0.16.1-alpha.1`: the
-    # two mobile arms are the wall, everything else already finishes inside their shadow.
-    # `deploy-dev` is deliberately NOT behind this - dev is where somebody looks first, and holding
-    # it back a quarter of an hour would buy nothing, an alpha having no production estate to get
-    # ahead of.
-    #
-    # There is no CI condition here either - `release.yml` gates the whole run on `CI passed` being
-    # green on the very commit these artefacts are built from.
-    #
-    # `deploy-dev` IS NOT IN THIS LIST, and it must not be added. The two arms deploy DIFFERENT
-    # commits now - the alpha somebody published and the stable somebody published - so waiting on
-    # one from the other would be waiting on an unrelated run. A dev estate broken for a reason of
-    # its own (a mis-set DEV_ secret, a registry that timed out: measured on run 33633156004, its
-    # first day) must never hold a production release hostage.
-    if: |
-      always() &&
-      inputs.phase == 'production' &&
-      inputs.prerelease == 'false' &&
-      needs.enumerate-services.result == 'success' &&
-      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
-      (needs.build-docker-images.result == 'success' || needs.build-docker-images.result == 'skipped')
     permissions:
       # `write` only for the `prod-released` tag the last step moves - the deploy itself reads.
       contents: write
@@ -1111,7 +491,7 @@ jobs:
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
-          CHANGED_SERVICES: ${{ needs.enumerate-services.outputs.services_args }}
+          CHANGED_SERVICES: ${{ inputs.services_args }}
         run: |
           if [ -n "$CHANGED_SERVICES" ]; then
             echo "🔄 Pulling changed Docker images: $CHANGED_SERVICES"
@@ -1477,3 +857,4 @@ jobs:
           else
             echo "❌ Deployment to production failed"
           fi
+

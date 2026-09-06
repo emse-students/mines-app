@@ -477,7 +477,7 @@ reasons, and a procedure has to answer both:
    cluster in a major-version subdirectory beneath it; this repository mounts `postgres_data` at
    `/var/lib/postgresql/data`. So `docker-compose.prod.yml`, `docker-compose.dev.yml` and
    `infrastructure/local/docker-compose.yml` all change shape, not just a tag - and the `pg_isready`
-   / `psql` invocations in `deploy.yml`'s migration step run inside that container.
+   / `psql` invocations in `serve-prod.yml`'s migration step run inside that container.
 
 **What retires this entry, and it is the same thing that lifts the refusal:** a test that starts the
 NEW major against a data directory written by the OLD one and proves the upgrade path carries it.
@@ -6113,14 +6113,28 @@ the release because `CI passed` never ran on the commit - and the wait is for th
 after a failed release run. The bypass bought zero minutes and cost one refused run. Either write
 that down where somebody reaching for it will read it, or build a short path that is actually short.
 
-**5. THE RUN VIEW MISLEADS, WHICH IS WHERE THIS STARTED.** P3. `deploy.yml` is called twice with a
-`phase` input and every job inside carries `if: inputs.phase == ...`, so the two calls contribute
-identically-named jobs and half of them are `skipped` for reasons the names do not carry - the user
-read `Production estate / Deploy to dev.canari-emse.fr: skipped` and could not tell which skip was
-normal. The cheap fix is naming the jobs by phase. The deeper one is a composite action under
-`.github/actions/` with one small library workflow per target, which costs NOTHING in the Actions
-list the user wants kept short - that constraint is about VISIBLE workflows, and libraries have no
-triggers.
+**5. THE RUN VIEW MISLED, AND IT IS FIXED (2026-09-07) - NOT SHIPPED UNTIL A RELEASE CARRIES IT.**
+Was P3. `deploy.yml` was called twice with a `phase` input and every job inside carried
+`if: inputs.phase == ...`, so the two calls contributed identically-named jobs and half of them were
+`skipped` for reasons the names did not carry - the user read
+`Production estate / Deploy to dev.canari-emse.fr: skipped` and could not tell which skip was normal.
+**MEASURED before the fix**, on `v0.16.4` (run 34057019347), the last stable to reach the end: 22
+rows, 5 skipped, and **4 of those 5 structurally impossible** rather than merely not taken.
+
+THE DEEPER FIX WAS THE ONE TAKEN, and this entry had already named it: *one small library workflow
+per target, which costs NOTHING in the Actions list*. `deploy.yml` is gone, replaced by `build.yml`,
+`serve-dev.yml` and `serve-prod.yml` - one file per thing done, each called at most once, so every
+row a release draws is a row that can run. The release kind moved with it: it was resolved in
+`preflight` and then carried DOWN and re-tested in eight places, and it is now ONE fork in
+`release.yml` producing an estate NAME (user, 2026-09-07: *"faire la dichotomie plus tot dans
+l'arborescence"*). Neither estate workflow mentions a pre-release at all any more.
+
+ASSERTED, so it cannot regress quietly: `release-chain.test.sh` fails if any workflow is called
+twice, if the estate is resolved anywhere but the one fork, or if either estate workflow starts
+reading the release kind again (121 assertions, all green). `deploy-env.test.sh` follows the `.env`
+to `serve-prod.yml` and the DEV_ secrets to `serve-dev.yml` (41 assertions). `ecosystem-shape`
+carries the measured reason the four repositories legitimately differ here: the other three deploy
+ONE estate, their `deploy.yml` declares no `phase` at all, and `release.yml` calls it once.
 
 **AND THE CONSTRAINT THAT SHAPED ALL OF IT, WHICH IS NOT TO BE RELITIGATED.** *"le moins de workflows
 differents possibles, ca inonde la console github"*. The complexity did not appear from nowhere: it

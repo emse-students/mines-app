@@ -11,6 +11,48 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Changed - the release graph draws no impossible rows, and asks the release kind once
+
+**What the user saw.** *"Je vois beaucoup d'étapes dans le graphe github actions. N'y a-t-il pas plus
+simple, plus direct, ou simplement non redondant ? Des chemins impossibles à supprimer ?"* Measured
+on `v0.16.4` (run 34057019347), the last stable to reach the end: **22 rows, 5 skipped, and 4 of
+those 5 structurally impossible** - incapable of running on that call, whatever happened.
+
+**The cause was one file with a switch.** `deploy.yml` held the build jobs AND both estates behind
+`phase: build | production`, and `release.yml` called it TWICE. GitHub materialises every job of a
+called workflow as a row in the run graph, including the jobs whose `if:` cannot hold on that call,
+so each call drew the other call's jobs as dead rows. A parameter that selects half a file produces
+the other half as dead rows, on every call, for ever.
+
+It is three files now, split by what each DOES: `build.yml` (the frontend and the images),
+`serve-dev.yml` and `serve-prod.yml` (one estate each). None is called more than once. The
+permissions became exact as a consequence - the single `deploy` job had to grant the UNION of what
+both halves needed, so build jobs ran with a token that could move release markers.
+
+**And the release kind is asked once** (user: *"faire la dichotomie plus tôt dans l'arborescence"*).
+It was resolved in `preflight`, then carried DOWN and re-tested in eight places, each callee
+re-deriving the same fork. It becomes an estate NAME at one fork in `release.yml`; below it nothing
+asks again, and neither estate workflow mentions a pre-release at all. The rename also collapsed the
+frontend URL cross-check from two branches into one comparison, `URL_ENVIRONMENT != ESTATE`, because
+both sides finally speak the same vocabulary.
+
+### Fixed - a busy Apple review queue no longer skips the production deploy
+
+**What it cost.** Apple gives an app ONE non-terminal version slot, so releasing faster than Apple
+reviews finds it held - the expected outcome, and not a failure of anything. `submit.mjs` refused
+correctly (cancelling a review is a human decision) but left through `exit 1`, exactly as it does
+for a real refusal. `production` is a SUCCESS dependency on the iOS arm, so **a busy queue skipped
+the web deploy three times running** - v0.16.2, v0.16.3 and v0.16.4 - and nobody read it, because a
+red iOS arm had become the normal look of a release. Production sat on v0.16.1 for three days while
+two releases reported themselves shipped; the third was the WASM outage, and its fix reached the web
+only because a human deployed it by hand.
+
+`chooseVersionSlot` had always separated `blocked` from `fail`. The caller threw both as a bare
+`Error`, so a distinction that existed as a TYPE could only be recovered by reading English prose.
+It now leaves by its own exit code (`EXIT_SLOT_HELD`, 75) and `ios.yml` reports it as a notice,
+green, with a job summary naming what holds the slot. Anything else still exits 1 and still stops
+the web. Not a `continue-on-error`, which would have swallowed the real refusals too.
+
 ### Incident - 2026-09-06, every web login refused in v0.16.4
 
 **ADMIN BYPASS TAKEN, and this paragraph is the record the rule asks for.** `gh pr merge 399

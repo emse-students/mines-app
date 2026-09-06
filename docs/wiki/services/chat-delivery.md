@@ -1331,7 +1331,7 @@ means no future caller can bypass it by forgetting to call `confirmUnsafeLinkIfN
 - **Fails OPEN at every layer** - no `GOOGLE_SAFE_BROWSING_API_KEY` configured, a network error, a
   timeout, or a non-2xx response from Google all resolve to "not flagged". A safety check that
   cannot answer must never become an outage for every link in the app; the config-side warning
-  (`::warning::GOOGLE_SAFE_BROWSING_API_KEY is not set...` in `deploy.yml`) is the only trace of it.
+  (`::warning::GOOGLE_SAFE_BROWSING_API_KEY is not set...` in `serve-prod.yml`) is the only trace of it.
 - **Cached in its own `TtlCache<boolean>`**, independent of `previewCache` for the reason above.
   Google gives no cache guidance for a clean verdict (only a flagged match carries its own
   `cacheDuration`, e.g. `"300s"` - the longest one wins when several matches disagree), so a clean

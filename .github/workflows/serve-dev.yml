@@ -1,0 +1,225 @@
+name: Serve the dev estate
+
+# CALLED BY `release.yml` WHEN THE RELEASE IS A PRE-RELEASE, AND BY NOTHING ELSE.
+#
+# ONE ESTATE, ONE FILE, NO PHASE (2026-09-07). This job used to live in `deploy.yml` behind
+# `inputs.phase == 'build' && inputs.prerelease == 'true'`, in a file called twice - so it was drawn
+# as an impossible skipped row on every production call, and the release kind was re-tested here
+# although the caller had known it since `preflight`. See `build.yml` for the measurement that
+# ended that shape.
+#
+# WHAT THE `if:` USED TO CARRY, AND WHY NOTHING REPLACES IT. It read:
+#
+#     always() && inputs.phase == 'build' && vars.DEV_ENVIRONMENT_ENABLED == 'true' &&
+#     inputs.prerelease == 'true' && needs.enumerate-services.result == 'success' &&
+#     (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') && ...
+#
+# The last three clauses existed because a SKIP LAUNDERED A FAILURE (measured 2026-09-02): a job
+# whose dependency failed is reported `skipped`, which is indistinguishable from the legitimate
+# "the frontend did not change" skip, and this job once deployed an estate referencing an image
+# that had never been pushed. Hand-rolling that distinction is no longer necessary and the whole
+# expression is GONE: `release.yml` now calls this file with `needs: build`, and a success
+# dependency on a called workflow already refuses when any job inside it failed. The `always()`
+# goes with it - the file itself warned that `always()` plus a result test is how a gate becomes a
+# formality, and here it was one.
+#
+# The two clauses that were real decisions moved UP to the caller, where they are one `if:` each:
+# the release kind, and `vars.DEV_ENVIRONMENT_ENABLED`.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: 'The exact commit this estate is put on - resolved ONCE by the caller'
+        required: true
+        type: string
+      version:
+        description: 'The version the bump wrote into the manifests'
+        required: true
+        type: string
+      services_args:
+        description: 'The services to pull and recreate, computed by `build.yml` from what it
+          actually built. Handed down rather than re-derived: this file must not form its own
+          opinion about what exists in the registry.'
+        required: true
+        type: string
+      images_result:
+        description: 'The image matrix aggregate result from `build.yml`. Decides whether the two
+          frontend images are added to the pull list.'
+        required: true
+        type: string
+
+concurrency:
+  group: cd-deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+  DOMAIN: canari-emse.fr
+  # The second estate, on the SAME machine. A separate checkout because two estates sharing one
+  # working tree would race - a `git reset --hard` for one rewrites the compose file the other is
+  # being deployed from - and a separate compose project (`canari-dev`, declared in the file
+  # itself) because that is what gives it its own network and its own volumes.
+  DEV_DOMAIN: dev.canari-emse.fr
+  DEV_DEPLOY_PATH: /home/canari/canari-dev
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════════════════════
+  # THE DEV ESTATE - dev.canari-emse.fr, WHICH IS NOW THE PRE-RELEASE TARGET
+  #
+  # ONE JOB, NOT THREE. `build-frontend-dev` and `build-frontend-images-dev` were deleted on
+  # 2026-09-03: a CD run deploys exactly ONE estate now, so the frontend build above already builds
+  # the right bundle and tags the right images. The two near-identical jobs existed only because a
+  # single push used to deploy both estates at once, and they had already drifted apart.
+  #
+  # WHAT DEV IS FOR SINCE THE MIGRATION (user, 2026-09-02). It is no longer a rehearsal stage that
+  # every change passes through - development is LOCAL now - it is where a `X.X.X-alpha.N`
+  # pre-release lands, and what the Play internal track and the TestFlight internal group point at.
+  # `scheduled.yml`'s `dev-refresh` job keeps feeding it a copy of production every Monday, so an alpha still meets
+  # production-shaped data.
+  #
+  # THE GATE IS A REPOSITORY VARIABLE, NOT A SECRET. `vars.DEV_ENVIRONMENT_ENABLED` unset means this
+  # job skips and a pre-release deploys nothing. It is a `vars` and not a `secrets` entry so its
+  # value is visible in the run log: whether a second estate is being deployed is not a secret, and
+  # a silent gate is one nobody can debug.
+  #
+  # WHAT IS DELIBERATELY NOT HERE: no Stripe (dev has no payment credentials at all), and no
+  # separate BACKEND images - both estates deploy the same image by its commit sha, which is why
+  # `docker-compose.dev.yml` pins `TAG` exactly as production's does.
+  # ════════════════════════════════════════════════════════════════════════════════════════════
+
+  deploy-dev:
+    name: Deploy to dev.canari-emse.fr
+    runs-on: self-hosted
+    permissions:
+      contents: write
+      packages: read
+    environment:
+      name: development
+      url: https://${{ env.DEV_DOMAIN }}
+    steps:
+      # ONE NAMED STARTING POINT, whatever happened before. The dev estate has its OWN checkout,
+      # separate from production's, because two estates sharing one working tree would race: a
+      # `git reset --hard` for one rewrites the compose file the other is being deployed from. The
+      # clone is done here rather than by hand so the state is reproducible - a directory somebody
+      # created once, differently, is exactly the inherited state this repository keeps paying for.
+      - name: Ensure the dev checkout exists and is at this commit
+        run: |
+          set -euo pipefail
+          if [ ! -d "$DEV_DEPLOY_PATH/.git" ]; then
+            echo "no dev checkout at $DEV_DEPLOY_PATH - cloning"
+            rm -rf "$DEV_DEPLOY_PATH"
+            git clone --no-checkout \
+              "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+              "$DEV_DEPLOY_PATH"
+          fi
+          cd "$DEV_DEPLOY_PATH"
+          git remote set-url origin \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git fetch origin main
+          git reset --hard origin/main
+          echo "dev checkout at $(git rev-parse --short HEAD)"
+
+      # Renders infrastructure/.env for the dev estate and NOTHING ELSE, from the DEV_ secrets only.
+      # The list is the manifest's own `secret:` rows that dev does not skip; a row added there and
+      # not here is caught by `.github/scripts/tests/deploy-env.test.sh`, which derives this block.
+      #
+      # IT RUNS BEFORE ANY CONTAINER IS TOUCHED, and refuses to write a partial file: a missing
+      # required secret fails here, with the previous dev deployment still up.
+      - name: Render the dev environment
+        working-directory: ${{ env.DEV_DEPLOY_PATH }}
+        env:
+          DEV_JWT_SECRET: ${{ secrets.DEV_JWT_SECRET }}
+          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
+          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
+          DEV_AUTHENTIK_CLIENT_SECRET: ${{ secrets.DEV_AUTHENTIK_CLIENT_SECRET }}
+          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
+          DEV_POSTGRES_USER: ${{ secrets.DEV_POSTGRES_USER }}
+          DEV_POSTGRES_PASSWORD: ${{ secrets.DEV_POSTGRES_PASSWORD }}
+          DEV_GARAGE_RPC_SECRET: ${{ secrets.DEV_GARAGE_RPC_SECRET }}
+          DEV_GARAGE_ADMIN_TOKEN: ${{ secrets.DEV_GARAGE_ADMIN_TOKEN }}
+          DEV_GARAGE_ACCESS_KEY_ID: ${{ secrets.DEV_GARAGE_ACCESS_KEY_ID }}
+          DEV_GARAGE_SECRET_ACCESS_KEY: ${{ secrets.DEV_GARAGE_SECRET_ACCESS_KEY }}
+          DEV_CHANNELS_ENCRYPTION_SECRET: ${{ secrets.DEV_CHANNELS_ENCRYPTION_SECRET }}
+          DEV_INTERNAL_SHARED_SECRET: ${{ secrets.DEV_INTERNAL_SHARED_SECRET }}
+          DEV_CALL_ROOM_SECRET: ${{ secrets.DEV_CALL_ROOM_SECRET }}
+          DEV_INTERNAL_SECRET: ${{ secrets.DEV_INTERNAL_SECRET }}
+          DEV_EXTERNAL_API_KEY: ${{ secrets.DEV_EXTERNAL_API_KEY }}
+          DEV_SKY_API_KEY: ${{ secrets.DEV_SKY_API_KEY }}
+          DEV_FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.DEV_FIREBASE_SERVICE_ACCOUNT_JSON }}
+          DEV_CLOUDFLARE_CALLS_API_TOKEN: ${{ secrets.DEV_CLOUDFLARE_CALLS_API_TOKEN }}
+          DEV_CLOUDFLARE_TURN_KEY_ID: ${{ secrets.DEV_CLOUDFLARE_TURN_KEY_ID }}
+          DEV_MIGALLERY_API_KEY: ${{ secrets.DEV_MIGALLERY_API_KEY }}
+          DEV_GOOGLE_SAFE_BROWSING_API_KEY: ${{ secrets.DEV_GOOGLE_SAFE_BROWSING_API_KEY }}
+          DEV_SERVICE_ACCOUNT_USER_ID: ${{ secrets.DEV_SERVICE_ACCOUNT_USER_ID }}
+          # Push, iOS half. Available on dev on purpose: what stops a test notification reaching a
+          # real member is the copy's `TRUNCATE TABLE push_token`, not an absent key, so a dev estate
+          # can only reach a phone that has itself signed into dev. Absent, iOS falls back to an FCM
+          # banner and the deploy says so.
+          DEV_APNS_VOIP_KEY_P8: ${{ secrets.DEV_APNS_VOIP_KEY_P8 }}
+          DEV_APNS_VOIP_KEY_ID: ${{ secrets.DEV_APNS_VOIP_KEY_ID }}
+          DEV_APNS_VOIP_TEAM_ID: ${{ secrets.DEV_APNS_VOIP_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          bash infrastructure/deploy/render-env.sh \
+            --environment dev \
+            --domain "${{ env.DOMAIN }}" \
+            --build "dev.$(git rev-parse --short=7 HEAD)" \
+            --out infrastructure/.env
+
+          # THE THREE HOST PORTS ARE NOT WRITTEN HERE ANY MORE, and the reason is worth keeping.
+          # They used to be, in the shape `grep -q '^KEY=' .env || echo KEY=<dev value>`, and that
+          # never fired once: render-env.sh builds .env from `infrastructure/.env.example`, which
+          # DECLARES all three at production's numbers. The key was never absent, so the dev override
+          # was never applied and dev's .env asked for production's port 8080. They are `computed`
+          # manifest rows now, upserted by render-env.sh, so one place decides per environment.
+
+      # `dev` IS DEV'S MOVING TAG, FOR EVERY SERVICE AND NOT JUST THE TWO FRONTENDS. It used to be
+      # `TAG=latest` for the shared backends and `FRONTEND_TAG=dev` for the frontends, which worked
+      # only while one push deployed both estates from one commit. A pre-release and a stable are
+      # different commits now, so `latest` belongs to production alone and dev reads `dev`.
+      #
+      # A MOVING TAG AND NOT THE SHA, because the compose file resolves a tag for EVERY service and
+      # this release built only the ones that changed. `dev` resolves for all of them, each pointing
+      # at the last pre-release that touched it - which is exactly what a selective rebuild means.
+      #
+      # `--pull-services` carries the services the detector saw change; the two frontends are added
+      # unconditionally when their build ran, because a release always rebuilds them.
+      - name: Deploy the dev estate
+        working-directory: ${{ env.DEV_DEPLOY_PATH }}
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+          FRONTEND_TAG: dev
+          CHANGED_SERVICES: ${{ inputs.services_args }}
+          FRONTEND_IMAGES_BUILT: ${{ inputs.images_result }}
+        run: |
+          set -euo pipefail
+          pull="$CHANGED_SERVICES"
+          if [ "$FRONTEND_IMAGES_BUILT" = "success" ]; then
+            case " $pull " in
+            *" frontend "*) ;;
+            *) pull="$pull frontend frontend-ssr" ;;
+            esac
+          fi
+          bash infrastructure/deploy/deploy-environment.sh \
+            --environment dev \
+            --path "${{ env.DEV_DEPLOY_PATH }}" \
+            --tag dev \
+            --registry "${{ env.REGISTRY }}" \
+            --image-prefix "${{ env.IMAGE_PREFIX }}" \
+            --pull-services "$pull"
+
+      # WHAT THE DEV ESTATE IS RUNNING, recorded where a human can read it. This is not the change
+      # detector's input any more - that is the previous RELEASE now - so the tag exists only to
+      # answer the question the estate itself cannot.
+      - name: Record the deployed commit
+        if: success()
+        run: |
+          set -euo pipefail
+          git -C "${{ env.DEV_DEPLOY_PATH }}" tag -f dev-deployed "${{ inputs.sha }}"
+          git -C "${{ env.DEV_DEPLOY_PATH }}" push -f \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            refs/tags/dev-deployed
+          echo "dev-deployed -> ${{ inputs.sha }} (v${{ inputs.version }})"
+

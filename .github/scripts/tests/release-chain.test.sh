@@ -32,7 +32,7 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
 
-for f in release.yml deploy.yml android.yml ios.yml; do
+for f in release.yml build.yml serve-dev.yml serve-prod.yml android.yml ios.yml; do
   [ -r "$WF/$f" ] || { printf 'cannot read %s\n' "$WF/$f"; exit 1; }
 done
 
@@ -63,7 +63,7 @@ else
   pass 'bump-version.yml is gone; the bump is a job of release.yml'
 fi
 
-for f in deploy.yml android.yml ios.yml; do
+for f in build.yml serve-dev.yml serve-prod.yml android.yml ios.yml; do
   # A trigger, not a mention: the comments in these files explain what `workflow_run` used to do.
   if grep -qE '^  workflow_run:' "$WF/$f"; then
     fail "$f still triggers on workflow_run - it must be called, not woken"
@@ -72,9 +72,21 @@ for f in deploy.yml android.yml ios.yml; do
   fi
 done
 
-printf '\nthe three arms are called workflows, and they take the same three facts\n'
+printf '\nthe five arms are called workflows, and each takes exactly the facts it acts on\n'
 # =================================================================================================
-for f in deploy.yml android.yml ios.yml; do
+# WHAT CHANGED ON 2026-09-07, AND WHY THIS ASSERTION IS NARROWER NOW. Every arm used to be handed
+# `sha`, `version` AND `prerelease`, and each re-derived the same fork from that bit - one fact
+# tested in eight places down the tree. The fork is resolved ONCE in `release.yml` now and handed
+# down as a NAME, so what an arm declares follows what it actually decides:
+#
+#   build.yml        sha, version, estate      - the name picks the frontend secrets and the tag
+#   serve-dev.yml    sha, version, ...         - knows nothing of release kinds; it IS the dev estate
+#   serve-prod.yml   sha, version, ...         - likewise
+#   android.yml      sha, version, prerelease  - a store track IS a per-kind decision
+#   ios.yml          sha, version, prerelease  - likewise
+#
+# `sha` and `version` are what all five need, so those stay asserted for all five.
+for f in build.yml serve-dev.yml serve-prod.yml android.yml ios.yml; do
   if grep -qE '^  workflow_call:' "$WF/$f"; then
     pass "$f is callable"
   else
@@ -82,22 +94,35 @@ for f in deploy.yml android.yml ios.yml; do
   fi
 
   missing=''
-  for i in sha version prerelease; do
+  for i in sha version; do
     grep -qE "^      $i:" "$WF/$f" || missing="$missing $i"
   done
   if [ -z "$missing" ]; then
-    pass "$f declares sha, version and prerelease"
+    pass "$f declares sha and version"
   else
     fail "$f is missing input(s):$missing - an arm that guesses one of these can ship to the wrong place"
   fi
 done
 
+# THE ESTATE WORKFLOWS MUST NOT KNOW WHAT A PRE-RELEASE IS, and that is the whole of the change. If
+# either starts reading the release kind again, the fork has moved back down the tree and the
+# structurally impossible rows come back with it.
+for f in serve-dev.yml serve-prod.yml; do
+  # CODE ONLY: the headers of those files QUOTE the six-line boolean they replaced, so grepping
+  # the whole file would match the explanation of the very thing being asserted absent.
+  CODE="$(grep -vE '^[[:space:]]*#' "$WF/$f" || true)"
+  if grep -qE 'inputs\.(prerelease|phase)' <<<"$CODE"; then
+    fail "$f reads the release kind - the fork belongs in release.yml, ONCE, as an estate name"
+  else
+    pass "$f never asks what kind of release this is"
+  fi
+done
 printf '\nnothing on the release path resolves main for itself\n'
 # =================================================================================================
 # THE DEFECT THIS CLOSES. `main` is a MOVING reference and the bump's own push raises a `push`
 # event, so CI runs on `main` while the release is still going; a pull request merged in those
 # minutes lands inside the run. Every arm must build the SHA it was handed.
-for f in deploy.yml android.yml ios.yml; do
+for f in build.yml serve-dev.yml serve-prod.yml android.yml ios.yml; do
   if grep -qE '^ +ref: main$' "$WF/$f"; then
     fail "$f checks out 'ref: main' - it would build whatever landed while the release was running"
   else
@@ -105,29 +130,16 @@ for f in deploy.yml android.yml ios.yml; do
   fi
 done
 
-if grep -qE '^ +ref: \$\{\{ inputs\.sha \}\}$' "$WF/deploy.yml"; then
-  pass 'deploy.yml checks out the commit it was given'
-else
-  fail 'deploy.yml does not check out inputs.sha'
-fi
-
-# AND EVERY COMMIT HANDED DOWN IS THE BUMP'S - stated as a property of the file rather than as a
-# count of the arms, which is the second half of the 2026-09-04 lesson: the loop above says each arm
-# RECEIVES a sha, and this says no arm receives a DIFFERENT one. Together they hold however many
-# arms exist, where `-eq 3` broke the day a fourth was added.
-# shellcheck disable=SC2016  # `${{ ... }}` is GitHub Actions syntax and must reach grep
-# verbatim; expanding it in the shell would search for an empty string.
-# ONLY THE `with:` BLOCKS, because `sha:` at the same indentation is ALSO how the bump job declares
-# its OUTPUT (`${{ steps.push.outputs.sha }}`) - which is where the value comes from in the first
-# place. An unanchored scan reads that line as a fourth arm handed the wrong commit.
-STRAY_SHA="$(awk '/^    with:$/ { inw = 1; next } /^    [a-z]/ { inw = 0 } inw' "$WF/release.yml" \
-  | grep -E '^      sha:' | grep -vcF 'sha: ${{ needs.bump.outputs.sha }}' || true)"
-if [ "$STRAY_SHA" -eq 0 ]; then
-  pass 'every arm is handed needs.bump.outputs.sha and nothing else - one commit, one release'
-else
-  fail "$STRAY_SHA arm(s) are handed a commit that is not the bump's output - they would disagree about what shipped"
-fi
-
+# `serve-dev.yml` IS CHECKED DIFFERENTLY ON PURPOSE: it has no `ref:` because it does not use
+# `actions/checkout` for the estate - it drives its own long-lived checkout to the commit with git.
+# The question is the same one either way: does the file act on the commit it was handed?
+for f in build.yml serve-dev.yml serve-prod.yml; do
+  if grep -q 'inputs\.sha' "$WF/$f"; then
+    pass "$f acts on the commit it was given"
+  else
+    fail "$f never references inputs.sha - it would act on whatever HEAD it found"
+  fi
+done
 printf '\nthe gates run BEFORE the bump, and the bump before every arm\n'
 # =================================================================================================
 # THE ORDER IS THE FAIL-SAFE. Every arm needs the bump and the bump needs the preflight, so a
@@ -138,51 +150,55 @@ else
   fail 'the bump does not need the preflight - the gates would run beside the release, not before it'
 fi
 
-# NAMED, NOT COUNTED, since 2026-09-03. This asked whether EXACTLY THREE jobs in the file declare
+# NAMED, NOT COUNTED, since 2026-09-03. This used to ask whether EXACTLY THREE jobs declare
 # `needs: [preflight, bump]`, which answered the right question only while the file held exactly
 # three such jobs: adding the release-notes job - which legitimately needs both, and which nothing
 # depends on - broke an assertion about the store arms by changing the POPULATION rather than the
-# property. *A predicate that named the last incident is not the predicate that names the next
-# one.* What has to hold is that EACH ARM declares it, so each arm is asked by name.
-for arm in deploy android ios; do
-  if sed -n "/^  $arm:\$/,/^  [a-z-]*:\$/p" "$WF/release.yml" |
-    grep -qE '^    needs: \[preflight, bump\]$'; then
-    pass "the $arm arm needs the preflight AND the bump"
-  else
-    fail "the $arm arm does not declare 'needs: [preflight, bump]' - see below, this is not cosmetic"
-  fi
-done
-
-# A JOB CAN ONLY READ `needs.<job>` FOR A JOB IT DECLARES, and the failure is an EMPTY STRING rather
-# than an error. This was live for the length of one commit: the three arms declared `needs: bump`
+# property. *A predicate that named the last incident is not the predicate that names the next one.*
+#
+# AND DERIVED RATHER THAN LISTED, since 2026-09-07. It then named the three facts every arm is
+# handed - version, prerelease, sha - which held only while every arm was handed the same three. The
+# fork moved up to `release.yml` and the arms stopped being symmetric: `build` takes an estate NAME,
+# the two estate workflows take neither a kind nor an estate, and only the store arms still need the
+# release kind. A test listing what an arm receives would have to be edited every time an arm's
+# inputs change, which is how a test gets weakened rather than read.
+#
+# SO THE PROPERTY IS DERIVED FROM THE FILE. A job may only READ `needs.<job>` for a job it DECLARES,
+# and the failure mode is what makes this worth a test: reading an undeclared job yields an EMPTY
+# STRING, not an error. That was live for the length of one commit - the arms declared `needs: bump`
 # and read `needs.preflight.outputs.prerelease`, so every arm would have received `prerelease: ''`.
-# For a stable that is accidentally the right answer; for an ALPHA it is catastrophic and silent -
+# For a stable that is accidentally right; for an ALPHA it is catastrophic and silent, because
 # `ios.yml` and `android.yml` would have taken the `else` branch, baked the PRODUCTION origin into a
-# tester build, and passed their own "is this pointing at the right estate" assertion while doing it.
-# Green run, tester build against production.
+# tester build, and passed their own "is this pointing at the right estate" assertion while doing
+# it. Green run, tester build against production.
 #
-# NAMED, NOT COUNTED - and this one was counted until 2026-09-04, when adding the `production`
-# arm turned `-eq 3` into 4 and failed an assertion about the OTHER three. Same trap, same file,
-# second occurrence: *a predicate that named the last incident is not the predicate that names the
-# next one.* What has to hold is that EACH arm is handed all three facts, so each arm is asked by
-# name and a fifth arm can be added without touching this.
-#
-# Each arm's block is cut from its own key to the next job key at the same indentation, which is
-# also why the anchoring matters: `needs.preflight.outputs.version` appears inside the bump job's
-# steps too, where it is legitimate.
-for arm in deploy production android ios; do
+# Each arm's block is cut from its own key to the next job key at the same indentation, which is why
+# the anchoring matters: `needs.preflight.outputs.version` appears inside the bump job's steps too,
+# where it is legitimate.
+for arm in build serve-dev serve-prod android ios; do
   BLOCK="$(sed -n "/^  $arm:\$/,/^  [a-z][a-z-]*:\$/p" "$WF/release.yml")"
-  missing=''
-  for ref in \
-    'version: \$\{\{ needs\.preflight\.outputs\.version \}\}' \
-    'prerelease: \$\{\{ needs\.preflight\.outputs\.prerelease \}\}' \
-    'sha: \$\{\{ needs\.bump\.outputs\.sha \}\}'; do
-    grep -qE "^      $ref\$" <<<"$BLOCK" || missing="$missing ${ref%%:*}"
+  DECLARED="$(grep -oE '^    needs: .*$' <<<"$BLOCK" | sed 's/^    needs: //' | tr -d '[]' | tr ',' ' ')"
+
+  # Every arm reads the preflight's answers and the bump's sha, so every arm must declare both.
+  for want in preflight bump; do
+    case " $DECLARED " in
+      *" $want "*) pass "the $arm arm needs the $want" ;;
+      *) fail "the $arm arm does not declare '$want' among its needs - it reads its outputs and would receive an EMPTY STRING" ;;
+    esac
   done
-  if [ -z "${missing// /}" ]; then
-    pass "the $arm arm is handed sha, version and prerelease from jobs it declares"
+
+  READS="$(grep -oE 'needs\.[a-z-]+\.outputs' <<<"$BLOCK" | sed 's/needs\.//; s/\.outputs//' | sort -u | tr '\n' ' ')"
+  undeclared=''
+  for j in $READS; do
+    case " $DECLARED " in
+      *" $j "*) ;;
+      *) undeclared="$undeclared $j" ;;
+    esac
+  done
+  if [ -z "${undeclared// /}" ]; then
+    pass "the $arm arm reads only jobs it declares (${READS% })"
   else
-    fail "the $arm arm is not handed:$missing - an arm reading a job it does not need gets an EMPTY STRING, silently"
+    fail "the $arm arm reads needs.$undeclared without declaring it - that is an EMPTY STRING, not an error, and it is silent"
   fi
 done
 
@@ -193,66 +209,68 @@ printf '\nthe web never serves a version a store refused\n'
 # produced, and a mobile arm that failed - a refused `.aab`, an App Store submission answered with a
 # 500 on `v0.16.1` - left the web a version ahead of every phone, with nothing saying so.
 #
-# `deploy.yml` IS THEREFORE CALLED TWICE, and the split is what makes the gate expressible at all: a
-# called workflow cannot depend on a job of its caller, so gating the single call would have held
-# `deploy-dev` back too.
-PROD_BLOCK="$(sed -n '/^  production:$/,/^  [a-z][a-z-]*:$/p' "$WF/release.yml")"
+# THE TWO ESTATES ARE TWO SEPARATE CALLS, and that is what makes the gate expressible at all: a
+# called workflow cannot depend on a job of its caller, so gating one shared call would have held
+# the dev estate back too.
+#
+# CAPTURED, THEN MATCHED WITH A HERESTRING - AND `| grep -q` HERE IS A REAL DEFECT, NOT A STYLE.
+# `set -o pipefail` is on (line 25), and `grep -q` EXITS THE INSTANT IT MATCHES: the `sed` upstream
+# is then killed by SIGPIPE and exits 141, so the PIPELINE reports failure precisely when the match
+# SUCCEEDED. It bites only when the left-hand side is bigger than the pipe buffer or slower than
+# grep, which is why the same idiom passes elsewhere in this suite on smaller blocks. It was
+# measured: green on this workstation (MSYS bash does not deliver SIGPIPE the same way) and RED on
+# Ubuntu in CI, on two assertions whose condition was in fact satisfied.
+PROD_BLOCK="$(sed -n '/^  serve-prod:$/,/^  [a-z][a-z-]*:$/p' "$WF/release.yml")"
+DEV_BLOCK="$(sed -n '/^  serve-dev:$/,/^  [a-z][a-z-]*:$/p' "$WF/release.yml")"
 
-if grep -qE '^    needs: \[preflight, bump, deploy, android, ios\]$' <<<"$PROD_BLOCK"; then
+if grep -qE '^    needs: \[preflight, bump, build, android, ios\]$' <<<"$PROD_BLOCK"; then
   pass 'the production estate waits for the build AND for both stores'
 else
-  fail 'release.yml has no production arm needing [preflight, bump, deploy, android, ios] - the web can go ahead of the stores again'
+  fail 'release.yml has no serve-prod arm needing [preflight, bump, build, android, ios] - the web can go ahead of the stores again'
 fi
 
 # `always()` HERE WOULD BE THE WHOLE DEFECT BACK. A success dependency is what makes a failed store
-# arm stop production; `always()` plus a result test is how a gate becomes a formality, and it is
-# exactly the shape used LEGITIMATELY inside deploy.yml, so it would read as idiomatic.
+# arm stop production; `always()` plus a result test is how a gate becomes a formality, and it is a
+# shape used LEGITIMATELY inside build.yml, so it would read as idiomatic here.
 if grep -q 'always()' <<<"$PROD_BLOCK"; then
   fail 'the production arm uses always() - a failed store arm would no longer stop the web deploy'
 else
   pass 'the production arm has no always() - a failed store arm leaves it skipped'
 fi
 
-for want in 'phase: build' 'phase: production'; do
-  if grep -qE "^      $want\$" "$WF/release.yml"; then
-    pass "release.yml calls deploy.yml with '$want'"
-  else
-    fail "release.yml never passes '$want' - the two halves of deploy.yml are not told apart"
-  fi
-done
-
-# AND THE CALLEE MUST ACTUALLY READ IT. An input nothing branches on is a comment.
-n="$(grep -cE "inputs\.phase == '(build|production)'" "$WF/deploy.yml")"
-if [ "$n" -ge 4 ]; then
-  pass "deploy.yml branches on inputs.phase in $n places (the build jobs, and the production estate)"
+# AND THE DEV ESTATE IS NOT BEHIND THE STORES. It never was, and the reason survives the rewrite:
+# dev is where somebody looks first, an alpha has no production estate to get ahead of, and holding
+# it a quarter of an hour behind two store queues would buy nothing.
+if grep -qE '^    needs: .*(android|ios)' <<<"$DEV_BLOCK"; then
+  fail 'serve-dev waits for a store - an alpha would sit behind queues it does not use'
 else
-  fail "deploy.yml reads inputs.phase only $n time(s) - a phase that gates nothing lets both halves run on both calls"
+  pass 'the dev estate does not wait for a store'
 fi
 
-# CAPTURED, THEN MATCHED WITH A HERESTRING - AND `| grep -q` HERE IS A REAL DEFECT, NOT A STYLE.
-# `set -o pipefail` is on (line 25), and `grep -q` EXITS THE INSTANT IT MATCHES: the `sed` upstream
-# is then killed by SIGPIPE and exits 141, so the PIPELINE reports failure precisely when the match
-# SUCCEEDED. It bites only when the left-hand side is bigger than the pipe buffer or slower than
-# grep - `deploy-to-server` is the last job of a 1479-line file, 41 KB - which is why the same idiom
-# passes elsewhere in this suite on smaller blocks.
-#
-# MEASURED, AND IT PASSED LOCALLY. These two assertions were green on this workstation (MSYS bash
-# does not deliver SIGPIPE the same way) and RED on Ubuntu in CI, for a reason nothing in the output
-# named: `FAIL` on the two assertions whose condition was in fact satisfied. A test that inverts its
-# own verdict by platform is worse than no test.
-DEPLOY_PROD="$(sed -n '/^  deploy-to-server:$/,/^  [a-z][a-z-]*:$/p' "$WF/deploy.yml")"
-DEPLOY_DEV="$(sed -n '/^  deploy-dev:$/,/^  [a-z][a-z-]*:$/p' "$WF/deploy.yml")"
-
-if grep -qE "^      inputs\.phase == 'production' &&$" <<<"$DEPLOY_PROD"; then
-  pass 'the production estate runs only in the production phase'
+# =================================================================================================
+# THE FORK HAPPENS ONCE, AND HIGH (user, 2026-09-07: *"faire la dichotomie plus tot dans
+# l'arborescence"*)
+# =================================================================================================
+# The release kind was resolved in `preflight` and then carried down as `prerelease` and re-tested
+# in eight places, each callee re-deriving the same fork. It becomes an estate NAME once, here.
+n="$(grep -cE '^      estate: ' "$WF/release.yml")"
+if [ "$n" -eq 1 ]; then
+  pass 'the release kind becomes an estate name in exactly one place'
 else
-  fail 'deploy-to-server does not require phase == production - the first call would deploy the web before the stores answered'
+  fail "release.yml resolves an estate in $n place(s), not 1 - the dichotomy has spread back down the tree"
 fi
 
-if grep -qE "^      inputs\.phase == 'build' &&$" <<<"$DEPLOY_DEV"; then
-  pass 'the dev estate stays in the build phase - it is not held behind the stores'
+# NO LIBRARY IS CALLED TWICE, WHICH IS WHAT MANUFACTURED THE IMPOSSIBLE ROWS. GitHub materialises
+# EVERY job of a called workflow as a row in the run graph, including jobs whose `if:` cannot hold
+# on that call. `deploy.yml` was one file with a `phase: build | production` switch called twice, so
+# each call drew the other call's jobs as skipped rows that were not "not taken this time" but
+# INCAPABLE of running. Measured on v0.16.4 (run 34057019347), the last stable to reach the end: 22
+# rows, 5 skipped, 4 of those 5 structurally impossible.
+DUPES="$(grep -oE 'uses: \./\.github/workflows/[a-z-]+\.yml' "$WF/release.yml" | sort | uniq -d | tr '\n' ' ')"
+if [ -z "${DUPES// /}" ]; then
+  pass 'no workflow is called twice - every row a release draws is a row that can run'
 else
-  fail 'deploy-dev is no longer in the build phase - dev would wait a quarter of an hour for stores an alpha does not need'
+  fail "release.yml calls the same workflow more than once ($DUPES) - the jobs the other call gates off will be drawn as structurally impossible skipped rows"
 fi
 
 if grep -qE 'bash \.github/scripts/release-preflight\.sh' "$WF/release.yml"; then
@@ -462,7 +480,7 @@ printf '\nno step in an arm is gated on an event that can never happen there\n'
 # The shape test as first written did not catch it, because it asked about triggers and inputs and
 # not about the conditions on steps. A condition that cannot be true is the same class of defect as
 # a required check that is always skipped: invisible, green, and load-bearing.
-for f in deploy.yml android.yml ios.yml; do
+for f in build.yml serve-dev.yml serve-prod.yml android.yml ios.yml; do
   if grep -qE "^\s+if:.*github\.event_name\s*==\s*'workflow_run'" "$WF/$f"; then
     fail "$f gates a step on github.event_name == 'workflow_run', which is NEVER true in a called workflow - the step is dead and its run stays green"
   else
@@ -599,7 +617,7 @@ printf '\nevery arm is granted what it asks for, because a caller CAPS a called 
 # SO THIS IS DERIVED FROM BOTH SIDES rather than typed: it reads every `<scope>: write` each callee
 # asks for and demands the same line inside the caller's job for it. Adding a scope to an arm fails
 # this test until the caller grants it, which is the only ordering that cannot ship broken.
-for pair in 'deploy deploy.yml' 'production deploy.yml' 'android android.yml' 'ios ios.yml'; do
+for pair in 'build build.yml' 'serve-dev serve-dev.yml' 'serve-prod serve-prod.yml' 'android android.yml' 'ios ios.yml'; do
   job="${pair%% *}"
   wf="${pair##* }"
 

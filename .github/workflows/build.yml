@@ -1,0 +1,457 @@
+name: Build the estate images
+
+# CALLED BY `release.yml`, AND BY NOTHING ELSE. THIS FILE BUILDS; IT DEPLOYS NOTHING.
+#
+# WHY IT IS ITS OWN FILE (2026-09-07). It was the first half of `deploy.yml`, one workflow with a
+# `phase: build | production` input that `release.yml` called TWICE. GitHub materialises EVERY job
+# of a called workflow as a row in the run graph - including the jobs whose `if:` cannot possibly
+# hold on that call. So the production call drew `Build Frontend`, `Build & Push Docker Images` and
+# `Deploy to dev` as skipped rows that were not "not taken this time" but INCAPABLE of running, and
+# the build call drew `Deploy to Production Server` the same way.
+#
+# MEASURED, on `v0.16.4` (run 34057019347), the last stable that reached the end: 22 rows, 5
+# skipped, and 4 of those 5 structurally impossible. A parameter that selects half a file produces
+# the other half as dead rows, on every call, for ever.
+#
+# So the split is by WHAT A FILE DOES. This one builds. `serve-dev.yml` and `serve-prod.yml` each
+# deploy ONE estate. `release.yml` calls exactly the ones a release kind needs, and every row a run
+# draws is a row that can run.
+#
+# `estate` AND NOT `prerelease`, WHICH IS THE OTHER HALF OF THE SAME CHANGE (user, 2026-09-07:
+# *"faire la dichotomie plus tot dans l'arborescence"*). The pre-release bit was resolved once in
+# `preflight` and then carried DOWN and re-tested in eight places, each re-deriving the same fork
+# for itself. It is a NAME now, decided at the fork in `release.yml`: this file is TOLD which estate
+# it builds for and asks nothing further. Two things genuinely differ by estate, and both read that
+# name directly - the secret set that goes into the frontend `.env`, and the floating docker tag.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: 'The exact commit to build - resolved ONCE by the caller'
+        required: true
+        type: string
+      version:
+        description: 'The version the bump wrote into the manifests'
+        required: true
+        type: string
+      estate:
+        description: 'Which estate these images are for: `dev` or `production`. THE NAME, not a
+          boolean to re-derive: it selects the frontend secret set and the floating docker tag, and
+          those are the only two things that differ.'
+        required: true
+        type: string
+    outputs:
+      services_args:
+        description: 'The service list the deploy jobs pull and recreate. It is computed here
+          because it is computed from what was BUILT, and the estate workflows are handed the
+          answer rather than re-deriving it - the one value that ever crossed this seam.'
+        value: ${{ jobs.enumerate-services.outputs.services_args }}
+      images_result:
+        description: 'Whether the image matrix ran, as its aggregate result (`success` when it
+          built, `skipped` when nothing needed rebuilding). A MATRIX job cannot publish a normal
+          output - the last leg to finish would win - so the aggregate result is the only honest
+          answer, and the dev estate uses it to decide whether the two frontend images are worth
+          pulling.'
+        value: ${{ jobs.build-docker-images.result }}
+
+# `cancel-in-progress: false` because cancelling a build halfway can leave a half-pushed image tag
+# that a deploy would then pull. Queueing behind it is the only safe answer.
+#
+# THE SAME GROUP AS THE TWO ESTATE WORKFLOWS, deliberately: splitting the file must not change what
+# can run at once. `cd-deploy` covered building and deploying together before the split and it
+# still does, so a second release queues behind the first exactly as it always has.
+concurrency:
+  group: cd-deploy
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+  DOMAIN: canari-emse.fr
+  DEV_DOMAIN: dev.canari-emse.fr
+
+jobs:
+  # THE DECISION IS MADE ONCE, IN `release.yml`, AND HANDED DOWN.
+  #
+  # A `release-kind` job used to live here: it checked out `main`, read the version back off the
+  # bumped manifest and published it as outputs, because a `workflow_run` carries neither
+  # `release.prerelease` nor a usable branch. That reasoning was right and it is now the
+  # orchestrator's, one level up, where the bump that WROTE the manifest can read it without a
+  # second checkout - and where the two store chains read the same answer instead of each
+  # deriving its own. `inputs.sha` is therefore the one commit this whole run builds.
+
+  enumerate-services:
+    name: Enumerate the services to build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      services_csv: ${{ steps.detect.outputs.services_csv }}
+      services_args: ${{ steps.detect.outputs.services_args }}
+      any_changed: ${{ steps.detect.outputs.any_changed }}
+      frontend_changed: ${{ steps.detect.outputs.frontend_changed }}
+    steps:
+      # NO CHECKOUT, NO HISTORY, NO TOKEN - all three existed for the diff that was deleted on
+      # 2026-09-03. This job reads no file and calls no API: the service list and the dockerfile
+      # map are inline below, and a `fetch-depth: 0` was a full clone of the repository, on every
+      # release, to answer a question nobody asks any more.
+      - name: Name every service, and the dockerfile that builds it
+        id: detect
+        run: |
+          set -euo pipefail
+
+          declare -A SERVICE_DOCKERFILE=(
+            [core-service]="./infrastructure/local/Dockerfile.core-service"
+            [social-service]="./infrastructure/local/Dockerfile.social-service"
+            [chat-gateway]="./infrastructure/local/Dockerfile.chat-gateway"
+            [call-service]="./infrastructure/local/Dockerfile.call-service"
+            [chat-delivery-service]="./infrastructure/local/Dockerfile.chat-delivery-service"
+            [frontend]="./infrastructure/local/Dockerfile.frontend"
+            [frontend-ssr]="./infrastructure/local/Dockerfile.frontend-ssr"
+            [media-service]="./infrastructure/local/Dockerfile.media-service"
+          )
+
+          ALL_SERVICES=(
+            core-service
+            social-service
+            chat-gateway
+            call-service
+            chat-delivery-service
+            frontend
+            frontend-ssr
+            media-service
+          )
+
+          # EVERY SERVICE, EVERY RELEASE - THE DIFF WAS DELETED ON 2026-09-03 (user: *"On pourrait
+          # retirer ce qui est du detect changed services pour tout recompiler, de toute facon ce
+          # qui prend du temps c'est android et iOS"*).
+          #
+          # MEASURED ON `v0.16.1-alpha.1`, which is what settles it rather than the argument:
+          #
+          #     14min  Android                    }
+          #     14min  iOS                        } concurrent
+          #      4min  the slowest docker image   } all concurrent, and therefore entirely
+          #      2min  the frontend build         } inside the 14-minute shadow
+          #      1min  the dev deploy
+          #      0min  this job
+          #
+          # The detection saved nothing a release actually waits for. What it COST was a second
+          # thing that had to be right: a baseline resolved from the previous release of the same
+          # kind, a `git diff` against it, and a hand-written mapping from changed path to service -
+          # a mapping that omits a service silently, and then ships a stale image with nothing
+          # saying so. An optimisation whose failure mode is invisible, buying zero wall clock.
+          #
+          # AND IT WAS LOAD-BEARING FOR THE CONCURRENCY PROPERTY, which is why deleting it is a
+          # simplification and not a loss. This workflow QUEUES rather than cancels, and GitHub
+          # keeps at most one waiting run per group and drops the rest; what made those dropped runs
+          # harmless was precisely that this job measured against the previous RELEASE rather than
+          # the previous RUN, so the survivor rebuilt everything they would have. Building
+          # everything makes that property trivially true instead of true-by-argument.
+          #
+          # WHAT IS KEPT IS THE LIST AND THE DOCKERFILE MAP, because they exist nowhere else and
+          # `tests/compose-wiring.test.sh` reads the compose file for the other half of the same
+          # question.
+          # `any_changed` and `frontend_changed` are CONSTANTS now. They are kept rather than
+          # deleted because every gate on the production deploy reads them, and removing them
+          # means touching those gates - the same surgery as making production wait for the
+          # store arms. Those go together, in one change, or not at all.
+
+          MATRIX_ITEMS=""
+          FRONTEND_CHANGED="false"
+          for service in "${ALL_SERVICES[@]}"; do
+            dockerfile="${SERVICE_DOCKERFILE[$service]}"
+            MATRIX_ITEMS+="{\"name\":\"$service\",\"context\":\".\",\"dockerfile\":\"$dockerfile\"},"
+            case "$service" in
+              frontend|frontend-ssr) FRONTEND_CHANGED="true" ;;
+            esac
+          done
+          MATRIX_ITEMS="${MATRIX_ITEMS%,}"
+          MATRIX="{\"include\":[${MATRIX_ITEMS}]}"
+          SERVICES_CSV="$(IFS=,; echo "${ALL_SERVICES[*]}")"
+          SERVICES_ARGS="$(IFS=' '; echo "${ALL_SERVICES[*]}")"
+          ANY_CHANGED="true"
+          echo "Services selected for image rebuild: ${SERVICES_ARGS}"
+
+          {
+            echo "matrix=$MATRIX"
+            echo "services_csv=$SERVICES_CSV"
+            echo "services_args=$SERVICES_ARGS"
+            echo "any_changed=$ANY_CHANGED"
+            echo "frontend_changed=$FRONTEND_CHANGED"
+          } >> "$GITHUB_OUTPUT"
+
+  # ONE FRONTEND BUILD, WHOSE ENVIRONMENT IS CHOSEN BY THE RELEASE.
+  #
+  # There used to be two of these jobs, identical but for their secrets, because one CD run deployed
+  # both estates. A run now deploys exactly one - a pre-release goes to dev, a stable to production -
+  # so the second job had nothing left to be. The duplication was never harmless: the two drifted,
+  # and the dev copy is where the `VITE_DEPLOY_ENVIRONMENT` banner lived while nothing said so.
+  #
+  # THE BUILD CANNOT BE RE-TAGGED FROM ONE ESTATE TO THE OTHER, which is why the environment has to
+  # be decided here and not at deploy time: SvelteKit inlines `import.meta.env.*` at build time, so
+  # the API origins, the Authentik client id and the banner are baked into the bundle. Shipping
+  # production's image to dev would point dev's browser at production.
+  build-frontend:
+    name: Build Frontend
+    needs: enumerate-services
+    # `phase == 'build'` HERE AND ON THE NEXT TWO JOBS, `production` ON THE LAST ONE. This file is
+    # called TWICE per stable release, and each call runs one half; the images are pushed to GHCR by
+    # the first call, so the second has nothing left to build and only has to deploy what is already
+    # in the registry.
+    if: needs.enumerate-services.outputs.frontend_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned via `.bun-version`, the one place this repo names a bun. It must never be
+          # "latest": that resolves through api.github.com/repos/oven-sh/bun/git/refs/tags and can
+          # 401 with GITHUB_TOKEN. The version itself is free to be the newest bun - what must NOT
+          # change is the LOCKFILE version, which `Guard the bun lockfile version` in
+          # `code-analysis.yml` enforces directly. See `ecosystem-convergence.md` section 10.
+          bun-version-file: ".bun-version"
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            frontend/node_modules
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('frontend/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bunx svelte-kit sync
+
+      - name: Build MLS WASM
+        uses: ./.github/actions/build-mls-wasm
+
+      - name: Generate protobuf bindings
+        working-directory: frontend
+        run: bun run proto:gen
+
+      # THE THREE SECRETS NEITHER ESTATE CAN BE BUILT WITHOUT, taken from the set the release
+      # selects. A missing one would otherwise produce a bundle whose every API origin is the empty
+      # string, which builds fine and then fails in a browser with no server-side trace.
+      #
+      # THERE IS NO FALLBACK BETWEEN THE TWO SETS, deliberately. Falling back from `DEV_BASE_URL` to
+      # `BASE_URL` would build a pre-release pointing at PRODUCTION and hand it to the store tester
+      # programmes - precisely the accident the second environment exists to prevent. A missing
+      # secret stops the release instead.
+      - name: Validate the frontend build secrets
+        env:
+          ESTATE: ${{ inputs.estate }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+          AUTHENTIK_URL: ${{ secrets.AUTHENTIK_URL }}
+          AUTHENTIK_CLIENT_ID: ${{ secrets.AUTHENTIK_CLIENT_ID }}
+          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
+          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
+          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
+        run: |
+          if [ "$ESTATE" = "dev" ]; then
+            required="DEV_BASE_URL DEV_AUTHENTIK_URL DEV_AUTHENTIK_CLIENT_ID"
+          else
+            required="BASE_URL AUTHENTIK_URL AUTHENTIK_CLIENT_ID"
+          fi
+          missing=0
+          for name in $required; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set, and this build needs it. There is no fallback to the other environment's secrets - that would point this build at the wrong estate."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      - name: Create frontend .env
+        working-directory: frontend
+        env:
+          ESTATE: ${{ inputs.estate }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+          AUTHENTIK_URL: ${{ secrets.AUTHENTIK_URL }}
+          AUTHENTIK_CLIENT_ID: ${{ secrets.AUTHENTIK_CLIENT_ID }}
+          DEV_BASE_URL: ${{ secrets.DEV_BASE_URL }}
+          DEV_AUTHENTIK_URL: ${{ secrets.DEV_AUTHENTIK_URL }}
+          DEV_AUTHENTIK_CLIENT_ID: ${{ secrets.DEV_AUTHENTIK_CLIENT_ID }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUB_KEY }}
+          ANDROID_APP_LINK_SHA256: ${{ secrets.ANDROID_APP_LINK_SHA256 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+          EXPECTED_PROD_DOMAIN: ${{ env.DOMAIN }}
+          EXPECTED_DEV_DOMAIN: ${{ env.DEV_DOMAIN }}
+        run: |
+          set -euo pipefail
+
+          if [ "$ESTATE" = "dev" ]; then
+            APP_URL="$DEV_BASE_URL"
+            IDP_URL="$DEV_AUTHENTIK_URL"
+            IDP_CLIENT="$DEV_AUTHENTIK_CLIENT_ID"
+          else
+            APP_URL="$BASE_URL"
+            IDP_URL="$AUTHENTIK_URL"
+            IDP_CLIENT="$AUTHENTIK_CLIENT_ID"
+          fi
+
+          # THE ONE PLACE IN THIS CHANTIER WHERE A MISTAKE SHIPS TO PHONES, so it is an ASSERTION
+          # and never a convention. A store build carries its backend origin baked in and cannot be
+          # re-pointed afterwards: an alpha built against production would let the tester programme
+          # write to real data, and a stable built against dev would point every user at a box that
+          # is wiped every Monday. Neither failure is visible in a green pipeline. The secrets are
+          # selected by the release just above, so the only way to reach here wrong is a secret that
+          # holds the other environment's URL - which is exactly what this catches.
+          case "$APP_URL" in
+            *"$EXPECTED_DEV_DOMAIN"*) URL_ENVIRONMENT=dev ;;
+            *"$EXPECTED_PROD_DOMAIN"*) URL_ENVIRONMENT=production ;;
+            *) URL_ENVIRONMENT=unknown ;;
+          esac
+          # ONE COMPARISON, BECAUSE BOTH SIDES NOW SPEAK THE SAME VOCABULARY. This was two
+          # branches - one per release kind - each restating which domain that kind expects, which
+          # is the same fact written twice and drifting independently. `ESTATE` names the estate
+          # this build is FOR and `URL_ENVIRONMENT` names the one its secrets actually resolved TO,
+          # so the assertion is simply that they agree. It also catches `unknown`, which the two
+          # branches only caught by accident.
+          if [ "$URL_ENVIRONMENT" != "$ESTATE" ]; then
+            echo "::error::This build is for the ${ESTATE} estate, but its backend URL resolved to ${URL_ENVIRONMENT} (expected a host under ${EXPECTED_DEV_DOMAIN} for dev, or ${EXPECTED_PROD_DOMAIN} for production). Refusing to build an estate pointing anywhere else."
+            exit 1
+          fi
+          echo "Building the ${URL_ENVIRONMENT} frontend against ${APP_URL}"
+
+          # Every URL is the estate's own origin; nginx routes /ws, /api/ and /media/ on that host.
+          echo "VITE_FRONTEND_URL=${APP_URL}" >> .env
+          echo "VITE_GATEWAY_URL=${APP_URL}" >> .env
+          echo "VITE_CALL_URL=${APP_URL}" >> .env
+          echo "VITE_DELIVERY_URL=${APP_URL}" >> .env
+          echo "VITE_MEDIA_URL=${APP_URL}" >> .env
+          echo "VITE_SOCIAL_URL=${APP_URL}" >> .env
+          echo "VITE_CORE_URL=${APP_URL}" >> .env
+          echo "VITE_AUTHENTIK_URL=${IDP_URL}" >> .env
+          echo "VITE_AUTHENTIK_CLIENT_ID=${IDP_CLIENT}" >> .env
+
+          if [ "$ESTATE" = "dev" ]; then
+            # WHAT RAISES THE PERMANENT "test environment" BANNER. `deployEnvironment()` treats
+            # UNSET as production on purpose, so forgetting this line costs dev its banner - visible
+            # to whoever is looking at it - rather than putting a banner on production.
+            echo "VITE_DEPLOY_ENVIRONMENT=development" >> .env
+
+            # NO VITE_STRIPE_PUBLISHABLE_KEY on dev. It has no payment credentials at all (decided
+            # with the user), and a publishable key whose secret half is absent produces a checkout
+            # that opens and then fails - worse than a button that is not there.
+          elif [ -n "$STRIPE_PUBLISHABLE_KEY" ]; then
+            echo "VITE_STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}" >> .env
+          fi
+
+          if [ -n "$ANDROID_APP_LINK_SHA256" ]; then
+            echo "VITE_ANDROID_APP_LINK_SHA256=${ANDROID_APP_LINK_SHA256}" >> .env
+          fi
+          if [ -n "$APPLE_TEAM_ID" ]; then
+            echo "VITE_APPLE_TEAM_ID=${APPLE_TEAM_ID}" >> .env
+          fi
+          # In-app GIF picker (KLIPY). Optional - the GIF button is hidden when unset.
+          if [ -n "$KLIPY_API_KEY" ]; then
+            echo "VITE_KLIPY_KEY=${KLIPY_API_KEY}" >> .env
+          fi
+
+      - name: Build frontend
+        working-directory: frontend
+        # BUILD_WEB selects adapter-node over adapter-static (svelte.config.js). The web deploy
+        # needs a server so each page's <head> can be written before it is sent; the Tauri
+        # release workflows build without it and keep the static SPA output.
+        env:
+          BUILD_WEB: '1'
+        run: bun run build
+
+      - name: Upload frontend build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-build
+          path: frontend/build/
+          # Sans cette option, upload-artifact exclut les dotfiles : le dossier
+          # build/.well-known/ (assetlinks.json + apple-app-site-association)
+          # serait absent de l'image nginx -> 404 sur les App Links.
+          include-hidden-files: true
+          retention-days: 7
+
+  build-docker-images:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: [enumerate-services, build-frontend]
+    if: |
+      always() &&
+      needs.enumerate-services.result == 'success' &&
+      needs.enumerate-services.outputs.any_changed == 'true' &&
+      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One image's failure must NOT cancel its siblings. With the default fail-fast, a frontend
+      # build that failed on 11 August cancelled the media-service build sitting next to it - and
+      # because the detector below only looks at what the CURRENT push changed, no later run ever
+      # revisited it. `POST /api/media/touch` answered 404 in production for a day: the retention
+      # clock the endpoint exists to extend was silently dead, on a service whose own build was fine.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.enumerate-services.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Download frontend build artifact
+        # Both frontend images come from the one adapter-node artifact: nginx serves
+        # build/client + build/prerendered, the SSR image runs the server beside it.
+        if: matrix.name == 'frontend' || matrix.name == 'frontend-ssr'
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-build
+          path: frontend/build/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # THE IMMUTABLE TAG IS THE COMMIT, AND THE MOVING TAG SAYS WHICH ESTATE MAY PULL IT.
+      #
+      # `type=ref,event=branch` and `type=sha,prefix={{branch}}-` are gone with the push trigger:
+      # there is no branch event any more, and both produced tags nothing ever pulled.
+      #
+      # `latest` MOVES ONLY FOR A STABLE RELEASE, and `dev` only for a pre-release. Both compose
+      # files are deployed with an explicit `TAG=<sha>`, so neither moving tag decides what runs -
+      # but `latest` is what a human typing `docker pull` gets, and letting an alpha claim it would
+      # make that person's answer to "what is production running" quietly wrong. `enable=` takes a
+      # literal true/false, which is why the release kind is threaded in rather than inferred from
+      # the default branch (every release commit is on the default branch, alpha and stable alike,
+      # so `{{is_default_branch}}` could not tell them apart).
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ inputs.sha }}
+            type=raw,value=v${{ inputs.version }}
+            type=raw,value=latest,enable=${{ inputs.estate == 'production' }}
+            type=raw,value=dev,enable=${{ inputs.estate == 'dev' }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,ignore-error=true
+          cache-to: type=gha,mode=min,ignore-error=true
+

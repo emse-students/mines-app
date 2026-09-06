@@ -235,7 +235,7 @@ the update button. A build identity is REPORTING; a version is DECIDED on.
 [`version.service.spec.ts`](../../../apps/core-service/src/version/version.service.spec.ts) asserts
 `version` stays a bare semver while `build` carries the suffix.
 
-Both variables are now written by the pipeline: `deploy.yml` passes `--build dev.<sha7>` to
+Both variables are now written by the pipeline: `serve-dev.yml` passes `--build dev.<sha7>` to
 `render-env.sh`, which writes `DEPLOY_BUILD` for dev and, by decision, nothing for production. **So a
 non-null `build` IS dev**, and that is the cheapest statement anyone can make about which estate a
 name is serving.
@@ -313,7 +313,7 @@ passes silently.
 
 ## 8. How it is deployed
 
-One workflow, `deploy.yml`, with ONE added job since 2026-09-03, and a second that refreshes the data.
+One workflow, `serve-dev.yml` - its own file since 2026-09-07 - and a second that refreshes the data.
 Both are gated on `vars.DEV_ENVIRONMENT_ENABLED == 'true'`, a repository VARIABLE rather than a
 secret so its value is visible in the run log - whether a second estate is being deployed is not a
 secret, and a silent gate is one nobody can debug.
