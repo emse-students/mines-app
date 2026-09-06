@@ -11,6 +11,8 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+## [0.16.5] - 2026-09-06
+
 ### Fixed
 
 - **Every web login was refused with "PIN incorrect" in v0.16.4, and the PIN was right.** The prune
