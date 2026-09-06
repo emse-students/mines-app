@@ -53,9 +53,11 @@
   (tests + the `CI passed` aggregate + the security pass + the dependency ceiling), `release.yml`
   (the one deployment entry point), `arm-auto-merge.yml` (one job, `pull_request_target`, arms every
   pull request including Dependabot's), `scheduled.yml` (everything on a clock, one job per cron).
-  Four more are `workflow_call` LIBRARIES with no triggers of their own and no row of their own:
-  `deploy.yml`, `android.yml`, `ios.yml`, `code-analysis.yml`. **Adding a fifth visible workflow
-  needs a reason that is not "it is a different topic".**
+  Six more are `workflow_call` LIBRARIES: `build.yml`, `serve-dev.yml`, `serve-prod.yml`,
+  `code-analysis.yml`, plus `android.yml` + `ios.yml`, which DO carry a `workflow_dispatch` for
+  re-running a store arm by hand. **The deploy library became three files on 2026-09-07** - one file
+  behind a `phase` switch, called twice, drew the other call's jobs as impossible skipped rows
+  ([cicd](docs/wiki/cicd.md)). **A fifth visible workflow needs a reason beyond "another topic".**
 - **WORK GOES THROUGH A PULL REQUEST, AND IT MERGES ITSELF; NOTHING DEPLOYS ON A PUSH.** Both are the same fact and the commands are in THE DEVELOPMENT CYCLE below. Two consequences no task escapes: **a merged fix is not a shipped fix**, and a hyphen in the version IS the definition of a pre-release - read that way by `release_kind()` in `.github/scripts/lib/release-preconditions.sh`, the ONE implementation, and by `scripts/bump-app-version.sh`'s store band. Model on [workflow-migration](docs/wiki/workflow-migration.md) and [cicd](docs/wiki/cicd.md), the only copies. **Admin bypass exists and is the EMERGENCY path only**: taking it means production is broken right now, and it is written into `CHANGELOG.md` when taken.
 - NO FALLBACKS: never add a fallback path. Diagnose why the primary path failed and fix it there.
 - FIX, NEVER DEFER: a warning or failure you meet is yours, whether or not you caused it. "Pre-existing" is not a disposition.
@@ -238,11 +240,12 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    now refuses rather than passes**: a fresh device reaches every group with NOTHING online, so the
    rows that watch a responder heal one have no window left and need a group the device cannot
    self-serve ([backlog](docs/wiki/backlog.md)).
-2. **P1 - A DEVICE PUBLISHES 50 PREKEYS AND PURGES ALL 50, SO ITS POOL IS EMPTY ESSENTIALLY
-   ALWAYS** - `count=50 / deleted=50` off the server on a swept estate, `needed=50` client-side.
-   The guard shipped (#393) refuses on PROVENANCE, never a proportion; **the CAUSE is still open**
-   and mls-core is exonerated by test. An empty pool means the static fallback is served to every
-   peer, so #390's `last_resort` marking is load-bearing for the NORMAL path
+2. **P1 - A DEVICE REPLACES ITS WHOLE PREKEY BATCH ON EVERY CONNECTION, AND THAT CHURN GROWS
+   `mls.bin`** - P1 for the 48-second checkpoint it feeds, NOT because pools run dry. **Measured
+   2026-09-07, both estates: half the old headline is refuted** - the pool is FULL at rest (prod 437
+   of 614 devices at exactly 50, ZERO below 6), and one device's 50 all carry ONE timestamp to the
+   microsecond, which is the churn. `last_resort` is load-bearing for **32 devices**, not the normal
+   path. **CAUSE STILL OPEN**; #393's guard names it and nobody has seen which line it prints
    ([backlog](docs/wiki/backlog.md)).
 3. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).

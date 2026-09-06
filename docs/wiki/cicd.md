@@ -101,7 +101,7 @@ Runs on every pull request to `main`, and again on every push to `main`:
 | **Build** | the generated sources first - [`.github/actions/build-mls-wasm`](../../.github/actions/build-mls-wasm/action.yml) then `bun run proto:gen` - then `bun run build` |
 
 **The generated sources are not in git** (`frontend/src/lib/wasm/`, `src/lib/proto/canari.{js,d.ts}`),
-so EVERY pipeline that ships a client builds them: `deploy.yml`, the three release workflows, and
+so EVERY pipeline that ships a client builds them: `build.yml`, the three release workflows, and
 `ci.yml` because the gates import them. One composite action, one pinned
 `wasm-pack`, one cache key over `mls-wasm/**` + `mls-core/**` + `rust-toolchain.toml` - the
 committed binary went a crypto fix stale precisely because only some pipelines rebuilt it
@@ -114,7 +114,7 @@ check cannot - an admin bypassing the ruleset for an emergency hotfix still gets
 what the bypass skipped. **Nothing here deploys**, so a red run on `main` is a statement about the
 repository and never about production, which is still serving the last release.
 
-### Deploy an estate (`deploy.yml`)
+### Build and deploy an estate (`build.yml`, `serve-dev.yml`, `serve-prod.yml`)
 
 **IT HAS NO TRIGGER AT ALL: it is `workflow_call` only, and `release.yml` is its one caller**
 (user, 2026-09-02: *"Le deploiement (production, android, ios...) se fait au bump. Pas au push sur
@@ -123,7 +123,7 @@ would simply be a second door. Retrying a half-failed deploy is "Re-run failed j
 run that already exists.
 
 **IT IS THEREFORE A JOB OF THE RELEASE RUN, WHICH HAS ONE CONSEQUENCE WORTH KNOWING:**
-`gh run list --workflow deploy.yml` returns NOTHING. A called workflow's jobs belong to the caller's
+`gh run list --workflow build.yml` returns NOTHING. A called workflow's jobs belong to the caller's
 run, so the run to read is the `Release` one, and the harness's `deploy.mjs` names `release.yml` for
 that reason.
 
@@ -254,7 +254,7 @@ the same gate.
 
 ### The store arms (`ios.yml`, `android.yml`)
 
-Called by `release.yml` with the same three inputs `deploy.yml` gets, so the estate, the Play track
+Called by `release.yml` with the sha, the version and the release kind, so the Play track
 and the App Store channel cannot disagree about what is being released:
 
 | Workflow | Output | Stable | Pre-release |
@@ -437,7 +437,7 @@ long-lived PAT here: there is no secret to rotate before it silently expires.
 **One side effect, and why it is harmless HERE.** A push made with an App token *does* raise a
 `push` event, where a `GITHUB_TOKEN` push does not — `dependabot-auto-merge.yml` documents that
 asymmetry and depends on it. The consequence is that `ci.yml` runs once on the bump commit, which is
-useful rather than costly. **It does not double a deploy, only because `deploy.yml` has no trigger at all** - it is
+useful rather than costly. **It does not double a deploy, only because the three deploy libraries have no trigger at all** - it is
 `workflow_call` only. Anyone giving a deploy workflow a `push` trigger has to read this paragraph
 first.
 
@@ -530,10 +530,10 @@ See [`infrastructure/MIGRATION.md`](../../infrastructure/MIGRATION.md) (section 
 
 **A credential is real in THREE places, not two.** The CD regenerates `infrastructure/.env` from the
 repo secrets, so a value set over SSH lasts until the next deploy. It must therefore be a GitHub
-secret AND named in `deploy.yml` - and the third, just as mandatory and the easiest to forget, is the
+secret AND named in `serve-prod.yml` - and the third, just as mandatory and the easiest to forget, is the
 service's own `environment:` block in `infrastructure/docker-compose.prod.yml` (and `.dev.yml` for
 parity), spelt explicitly as `FOO: ${FOO:-}`. `.env` holding the value proves nothing about whether
-Compose passes it INTO the container: `GOOGLE_SAFE_BROWSING_API_KEY` shipped correctly in `deploy.yml`
+Compose passes it INTO the container: `GOOGLE_SAFE_BROWSING_API_KEY` shipped correctly in `serve-prod.yml`
 and `.env.example` and was still absent from the running container (WP-SAFELINK-1), where the
 endpoint answered 200 with a silently fail-open verdict rather than an error.
 `docker exec <container> env | grep FOO` is the only way to catch it.
@@ -549,7 +549,7 @@ changing — but nothing schedules it either, which is why it is written down he
 1. Change the `JWT_SECRET` repository secret (`openssl rand -hex 32`).
 2. Re-run the CD workflow.
 
-`deploy.yml` makes this safe by refusing every failure mode it can see:
+`serve-prod.yml` makes this safe by refusing every failure mode it can see:
 
 | Step | What it does |
 |---|---|
@@ -602,7 +602,7 @@ The `deploy-to-server` job runs on a self-hosted GitHub Actions runner (label `s
 
 ### There is one runner, so a workflow that asks for it must say what it may not overlap with
 
-`deploy.yml` declares `concurrency: { group: cd-deploy, cancel-in-progress: false }`. Until 2026-09-02 it
+All three deploy libraries declare `concurrency: { group: cd-deploy, cancel-in-progress: false }`. Until 2026-09-02 it
 declared nothing, and three deploy runs were in flight against `/home/canari/canari` at once - each
 able to `git reset --hard` and `docker compose up` while another was mid-flight. Production came out
 of it answering normally, which is why the gap had gone unnamed: the race heals cleanly almost every
@@ -647,15 +647,18 @@ gh release create vX.Y.Z --target $(git rev-parse HEAD)      <- the human gestur
        |- preflight   five gates; a refusal ends it here, having moved nothing
        |- bump        writes the version into 18 files, commits, pushes to main, outputs the SHA
        |
+       |- THE FORK, and there is only one: prerelease -> estate = dev | production
+       |
        |- three arms, in parallel, each building THAT SHA
-       |    |- deploy.yml (phase: build)
-       |    |               the frontend, every docker image, and dev.canari-emse.fr
-       |    |               for a pre-release
+       |    |- build.yml    the frontend and every docker image, built FOR that estate
        |    |- android.yml  .aab -> Play `production` (stable) or `internal` (pre-release)
        |    '- ios.yml      .ipa -> App Store Connect, then for a stable: version created,
        |                    build attached, release notes written, SUBMITTED FOR REVIEW
        |
-       '- deploy.yml (phase: production), STABLE ONLY, needs [deploy, android, ios]
+       |- serve-dev.yml   PRE-RELEASE ONLY, needs [build]
+       |    '- dev.canari-emse.fr - never held behind a store queue an alpha does not use
+       |
+       '- serve-prod.yml  STABLE ONLY, needs [build, android, ios]
             '- canari-emse.fr - and only once BOTH stores accepted this version
 ```
 
@@ -674,18 +677,37 @@ a version a store refused.** A build that fails to sign, an `.aab` Play rejects,
 submission answered with a 500 - each now leaves `production` *skipped* and production serving the
 previous release, instead of a web estate a version ahead of every phone.
 
-**Why `deploy.yml` is called twice rather than gated once.** A called workflow cannot depend on a
-job of its caller, and the two estates are jobs INSIDE `deploy.yml`. Putting `needs: [android, ios]`
-on the single call would have held `deploy-dev` back too - fifteen minutes bought for nothing, an
-alpha having no production estate to get ahead of. Two calls of ONE file, told apart by the `phase`
-input, keeps a single implementation of a deployment; the alternative was a second copy of the
-estate steps, which is the duplication this chain was rebuilt to remove. The second call builds
-nothing - the images are already in GHCR - so the split costs the ~30 seconds a job takes to start.
+**Why the two estates are separate calls.** A called workflow cannot depend on a job of its caller,
+so `needs: [android, ios]` is only expressible out in `release.yml`. Until 2026-09-07 that was done
+by calling ONE file, `deploy.yml`, TWICE with a `phase: build | production` input - and that is the
+shape that had to go. GitHub materialises EVERY job of a called workflow as a row in the run graph,
+including the jobs whose `if:` cannot possibly hold on that call, so each call drew the other call's
+jobs as skipped rows that were not "not taken this time" but INCAPABLE of running. Measured on
+`v0.16.4` (run 34057019347), the last stable to reach the end: **22 rows, 5 skipped, and 4 of those
+5 structurally impossible.** A parameter that selects half a file produces the other half as dead
+rows, on every call, for ever.
+
+So the split is by what a file DOES: `build.yml` builds, `serve-dev.yml` and `serve-prod.yml` each
+deploy one estate, and `release.yml` calls exactly the ones a release kind needs. Every row a run
+draws is a row that can run; `release-chain.test.sh` fails if any workflow is ever called twice
+again. The permissions became exact as a side effect - the single `deploy` job had to grant the
+UNION of what both halves needed, so the build jobs ran with a token that could move release
+markers and the estate jobs with one that could push images.
+
+**And the release kind is asked ONCE** (user, 2026-09-07: *"faire la dichotomie plus tot dans
+l'arborescence"*). `preflight` resolved it, and it was then carried DOWN as `prerelease` and
+re-tested in eight places, each callee re-deriving the same fork for itself. It becomes an estate
+NAME at the fork - `dev` or `production` - and below that point nothing asks again: neither estate
+workflow mentions a pre-release at all, and `build.yml` is simply told which estate it is building
+for. Two things genuinely differ by estate and both read that name directly: the secret set that
+goes into the frontend `.env`, and the floating docker tag. The rename also collapsed the URL
+cross-check from two branches into one comparison - `URL_ENVIRONMENT != ESTATE` - because both
+sides finally speak the same vocabulary.
 
 **`needs:` is a SUCCESS dependency and there is no `always()` there.** That is what makes the gate
 real rather than a formality: a failed or cancelled mobile arm leaves `production` skipped, and the
 recovery is "Re-run failed jobs" on the run that already exists. `release-chain.test.sh` fails if
-`always()` ever appears in that job, because inside `deploy.yml` the `always() && <result test>`
+`always()` ever appears in that job, because inside `build.yml` the `always() && <result test>`
 shape is used legitimately and would read as idiomatic here.
 
 **The measured cost is ~14 minutes, paid by production alone**, from `v0.16.1-alpha.1`: the two
@@ -1037,7 +1059,7 @@ than assumed, and three properties follow:
   #306 and #308 (`redis 8.10-alpine`) allowed, #307 (`adminer`, digest only) allowed.
 
 One operational consequence, learned twice on the day: **a fix applied to the box is erased by the
-next deploy.** `deploy.yml` runs `git reset --hard origin/main`, so pinning the image back over SSH
+next deploy.** `serve-prod.yml` runs `git reset --hard origin/main`, so pinning the image back over SSH
 restores service in seconds and survives exactly until the next dispatch - which is what happened at
 13:29, when a deploy from an origin still carrying 18 took production down a second time. The manual
 repair buys time to write the real one; it is never the repair.

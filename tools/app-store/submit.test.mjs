@@ -27,6 +27,9 @@ import {
   readWhatsNew,
   mintToken,
   shouldRetry,
+  exitFor,
+  SlotHeldError,
+  EXIT_SLOT_HELD,
 } from './submit.mjs';
 
 let pass = 0;
@@ -395,6 +398,34 @@ process.stdout.write('\nwhich version slot does this release belong in?\n');
 
   eq('the method is read case-insensitively', shouldRetry('patch', 503), true);
 }
+
+{
+  process.stdout.write('\na held version slot leaves by a different door than a failure\n');
+
+  // THE DISTINCTION EXISTED IN THE TYPE AND DIED AT THE EXIT. `chooseVersionSlot` has always
+  // separated `blocked` - Apple is still reviewing the previous version, which is expected and
+  // means there is nothing to do - from `fail`, which means something is wrong. The caller threw
+  // both as a bare `Error`, so both left through exit 1 and the workflow could only tell them
+  // apart by reading the message. Three iOS jobs went red that way for the one outcome that is
+  // GUARANTEED whenever we release faster than Apple reviews.
+  const held = exitFor(new SlotHeldError("version 0.16.4 occupies the app's only version slot"));
+  eq('a held slot leaves by its own exit code, not 1', held.code, EXIT_SLOT_HELD);
+  eq('and says so as a notice, so the job does not go red', held.line.startsWith('::notice::'), true);
+  eq('while still naming what holds the slot', held.line.includes('0.16.4'), true);
+
+  const broken = exitFor(new Error('the key or the JWT is wrong'));
+  eq('anything else still exits 1', broken.code, 1);
+  eq('and is an error, because somebody has to act on it', broken.line.startsWith('::error::'), true);
+
+  // A REJECTION IS NOT ALWAYS AN `Error`. Whatever reaches the handler has to leave through a code
+  // the shell can read, rather than throwing inside the handler itself.
+  eq('a non-Error rejection is a failure, not a deferral', exitFor('boom').code, 1);
+  eq('and its text survives into the line', exitFor('boom').line.includes('boom'), true);
+
+  // THE ONE THING A LATER EDIT COULD UNDO WITHOUT ANY OTHER ASSERTION NOTICING.
+  eq('the two doors are different doors', EXIT_SLOT_HELD !== 1, true);
+}
+
 
 process.stdout.write('\n');
 if (fail !== 0) {

@@ -53,7 +53,7 @@ NestJS services use TypeORM. In development `synchronize: true` auto-syncs the s
 entities; in production `synchronize: false`, so **every entity change needs a hand-written SQL file**
 in that service's `src/migrations/` directory or the column simply will not exist in production.
 
-The CD workflow applies them (`.github/workflows/deploy.yml`, "Run database migrations"): it collects
+The CD workflow applies them (`.github/workflows/serve-prod.yml`, "Run database migrations"): it collects
 `apps/*/src/migrations/*.sql`, sorts by path, and applies each file that is not yet recorded in the
 `schema_migrations` ledger (`filename`, `checksum`, `applied_at`), inside the postgres container with
 `ON_ERROR_STOP=1`. A failing migration fails the deploy.

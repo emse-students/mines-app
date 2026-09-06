@@ -35,6 +35,8 @@ on:
     - cron: '0 2 * * *'
     # Sundays. The Actions cache quota is 10 GB and buildkit entries are never evicted.
     - cron: '0 3 * * 0'
+    # Daily. Did the last stable release actually reach both stores?
+    - cron: '0 9 * * *'
     # Mondays. Re-seed the dev estate from production.
     - cron: '0 4 * * 1'
   workflow_dispatch:
@@ -43,7 +45,7 @@ on:
         description: 'Which one to run by hand'
         type: choice
         default: all
-        options: [all, hosts, analysis, alerts, caches, dev-refresh]
+        options: [all, hosts, analysis, alerts, caches, dev-refresh, stores]
       dry_run:
         description: 'dev-refresh only: report what would happen and change nothing'
         type: boolean
@@ -284,3 +286,67 @@ jobs:
           done
           echo "::error::dev did not answer /api/version within 2 minutes of the refresh - the restore may have left the database in a state the services cannot read"
           exit 1
+
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  # DID THE LAST STABLE ACTUALLY REACH BOTH STORES?
+  #
+  # THE THREE-DAY SILENCE THIS ENDS. A release publishes the web, Google Play and the App Store from
+  # one run, and nothing ever asked afterwards whether the stores got it. On 2026-09-04 the App
+  # Store submission stopped on an occupied version slot, the iOS job went red, `production` - a
+  # success dependency on it - was skipped, and the same thing happened on v0.16.3 and v0.16.4.
+  # Production sat on v0.16.1 for three days while two releases reported themselves shipped, and it
+  # was found by a HUMAN noticing a fix was not live.
+  #
+  # AND THE FIX FOR THAT CREATED THE GAP THIS CLOSES. A submission deferred by a busy Apple queue is
+  # GREEN now (`EXIT_SLOT_HELD` in `tools/app-store/submit.mjs`), which is right - the web must not
+  # be held hostage by a review queue - but it means a release can end with the build in TestFlight,
+  # never submitted, and nothing saying so. **Making a failure quiet without adding a report is how
+  # a three-day silence becomes a permanent one.**
+  #
+  # WHY A RED RUN IS THE REPORT, same as `hosts` above: nothing pages anybody in this estate, and
+  # `gh run list` is what actually gets read.
+  #
+  # IT DOES NOT CRY WOLF. Apple reviews in DAYS, so `WAITING_FOR_REVIEW` is a pass - a daily report
+  # that calls a normal review a problem is one its reader learns to skip, and the next real finding
+  # goes with it. What fails this job is a version never submitted, a version a store REFUSED, or a
+  # half this report could not read at all. That last one is deliberate: a credential that expires
+  # must not turn the whole check into a green light.
+  # ═══════════════════════════════════════════════════════════════════════════════════════════════
+  stores:
+    name: Did the last stable reach both stores?
+    if: >
+      github.event.schedule == '0 9 * * *' ||
+      (github.event_name == 'workflow_dispatch' &&
+      contains(fromJSON('["all", "stores"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      # The Play library takes its credential from a FILE, and `PLAY_SA_KEY` is the documented
+      # override for exactly this: CI has the JSON as a secret, not as a path.
+      - name: Put the Play service account where the library looks
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not set - the Play half of this report cannot be read, and this report does not treat 'could not look' as a pass"
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-sa.json"
+          echo "PLAY_SA_KEY=$RUNNER_TEMP/play-sa.json" >> "$GITHUB_ENV"
+
+      - name: Ask both stores what they hold
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APP_BUNDLE_ID: fr.emse.canari
+        run: bun tools/store-divergence/divergence.mjs

@@ -206,7 +206,7 @@ declaration is a mistake, and a mistake that picks a policy is worse than one th
 
 ### Every entry, and why it is there
 
-Enumerated in `infrastructure/.env.example`, written by `deploy.yml`, and pinned by the tests in
+Enumerated in `infrastructure/.env.example`, written by `serve-prod.yml`, and pinned by the tests in
 `main.rs` that drive a real preflight through the layer:
 
 | Origin | Client |

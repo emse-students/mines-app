@@ -86,17 +86,17 @@ derives it from the running pid every time and refuses to report success until C
 
 ## Running it
 
-`run.mjs` is the one way in. It refuses to start a phase whose devices are not ready, and it reads
+`archive/run.mjs` is the one way in. It refuses to start a phase whose devices are not ready, and it reads
 verdicts back from the record rather than off stdout, because several scripts print a raw observation
 dump *after* their verdict.
 
 ```
-bun run.mjs                      what exists, what is covered, what is not
-bun run.mjs MSG                  every script of one phase
-bun run.mjs MSG TYPE READ        several phases, in order
-bun run.mjs FWD --repeat 5       five passes, with a cross-pass table and a per-pass server window
-bun run.mjs --file msg3.mjs      one script, still with the preflight
-bun run.mjs --preflight W1 A1    the rig check ALONE, no script, no verdict
+bun archive/run.mjs                      what exists, what is covered, what is not
+bun archive/run.mjs MSG                  every script of one phase
+bun archive/run.mjs MSG TYPE READ        several phases, in order
+bun archive/run.mjs FWD --repeat 5       five passes, with a cross-pass table and a per-pass server window
+bun archive/run.mjs --file msg3.mjs      one script, still with the preflight
+bun archive/run.mjs --preflight W1 A1    the rig check ALONE, no script, no verdict
 ```
 
 `checks.mjs` is the manifest - which script covers which phase, and which devices each phase needs.
@@ -641,7 +641,7 @@ next one's symptom names the wrong cause.
 - **A phone `offline` in adb is a HUMAN action, and no `adb reconnect` clears it.** The screen has to
   be unlocked and the authorisation prompt accepted on the device itself.
 - A fresh install is a NEW PROCESS, so the old devtools forward is dead and `pin.mjs --device A1`
-  alone reports `ECONNREFUSED`. `bun run.mjs --preflight A1` forwards, foregrounds, sends the app to
+  alone reports `ECONNREFUSED`. `bun archive/run.mjs --preflight A1` forwards, foregrounds, sends the app to
   `/chat` (the PIN gate does not mount on `/posts`) and unlocks - use it rather than the pieces.
 - A Kotlin-only change does **not** need the Tauri build: `gradlew :app:assembleUniversalDebug` in
   `gen/android` packages the assets already on disk. The unit-test variants are
@@ -653,6 +653,36 @@ next one's symptom names the wrong cause.
 - An Android build leaves Paraglide resolving to English, which used to fail four locale-asserting
   test files afterwards. `bun run test` now compiles Paraglide itself, so there is nothing to
   remember - a rule that says "run X first" was a missing dependency, not a rule.
+
+### `deployed-wasm-check.mjs` - ask a DEPLOYED estate whether its wasm can panic
+
+```sh
+bun deployed-wasm-check.mjs                 # the estate SITE names   0 clean, 1 refused, 2 could not look
+bun deployed-wasm-check.mjs https://...     # one particular deployment
+```
+
+The estate comes from `SITE`, never from a literal: a rule anchored on a spelt origin does not FAIL
+when the estate moves, it ANSWERS - about a host nobody is testing any more. `origin-selftest.mjs`
+is the gate that says so, and it caught this file the day it was written.
+
+Walks the JS chunk graph from the landing page, finds the `mls_wasm_bg.<hash>.wasm` the app would
+load, downloads it, and refuses if it carries `std`'s unsupported-platform panic text.
+
+**Why it exists.** On 2026-09-06 `v0.16.4` deployed green, both estates answered `HTTP 200`, and
+every browser login was refused with *"PIN incorrect"* - `std::time::SystemTime::now()` had reached a
+crate that compiles to wasm32, where it is not implemented and PANICS. Nothing between the merge and
+the outage could see it: it compiles, the deploy is green, the site answers. Run against production
+during the incident it named `mls_wasm_bg.YXThuGSF.wasm` - the exact file in the user's stack trace -
+with no credentials, in seconds.
+
+**It is not a login**, and must not be sold as one: it cannot see a defect that needs a session. It
+is the part that needs no account and would have caught THIS one. `EXIT 2` means the walk could not
+find the asset, which is **not** a pass - "I could not look" and "it is clean" are different answers
+and the script keeps them apart.
+
+**Its sibling guards the build**: `frontend/scripts/check-wasm-no-unsupported.mjs`, wired into
+`bun run wasm:build`. Both are needed - a build can be fixed while an estate still serves the old
+image, which is exactly the state production was in for the twenty minutes after the fix was merged.
 
 ## Rules that make a result trustworthy
 

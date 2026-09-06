@@ -11,7 +11,114 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Added - a daily report that says when a stable reached the web but not a store
+
+Making the App Store deferral green fixes the web being held hostage by a review queue, and creates
+a gap: a release can now end with the build in TestFlight, never submitted, and nothing would say
+so. **Making a failure quiet without adding a report is how a three-day silence becomes a permanent
+one.**
+
+`tools/store-divergence/` asks both stores what they hold for the last stable GitHub release, and is
+the `stores` job of `scheduled.yml` (daily, 09:00 UTC, and on the dispatch menu). A red run is the
+report - nothing pages anybody in this estate, and `gh run list` is what gets read.
+
+It refuses to conflate the four causes, because a human acts on each differently: `pending` (with
+Apple, who review in days) is a PASS, since a daily report that calls a normal review a problem is
+one its reader learns to skip; `not-submitted` and `rejected` each fail with the errand named; and
+`unknown` - the report could not look - fails too, because a credential that expires would otherwise
+turn the whole check into a green light.
+
+Apple's rejection states became `VERSION_REJECTED` in `submit.mjs` rather than a second list here.
+They stay inside `VERSION_EDITABLE`, whose question - *may this release write into the slot?* -
+treats a rejected version and an unsubmitted one identically and correctly; the new set is the
+finer distinction the report needs, spread into the old one so the two readers cannot drift.
+
+One thing was measured rather than assumed: Play's release `name` has two formats on the real tracks
+(`"0.16.5"` from our pipeline, `"10012 (0.10.12)"` from Play's own older naming). An exact match
+alone reports the second absent; a substring match alone matches `0.16.5` inside `0.16.50`. Both,
+and the trap, are asserted.
+
+**Also fixed on the way:** `ci.yml`'s change detector named `deploy.yml` - a file that no longer
+exists - and named none of the three that replaced it, so a change to the production estate would
+not have run the suite that guards it.
+
+### Changed - the release graph draws no impossible rows, and asks the release kind once
+
+**What the user saw.** *"Je vois beaucoup d'étapes dans le graphe github actions. N'y a-t-il pas plus
+simple, plus direct, ou simplement non redondant ? Des chemins impossibles à supprimer ?"* Measured
+on `v0.16.4` (run 34057019347), the last stable to reach the end: **22 rows, 5 skipped, and 4 of
+those 5 structurally impossible** - incapable of running on that call, whatever happened.
+
+**The cause was one file with a switch.** `deploy.yml` held the build jobs AND both estates behind
+`phase: build | production`, and `release.yml` called it TWICE. GitHub materialises every job of a
+called workflow as a row in the run graph, including the jobs whose `if:` cannot hold on that call,
+so each call drew the other call's jobs as dead rows. A parameter that selects half a file produces
+the other half as dead rows, on every call, for ever.
+
+It is three files now, split by what each DOES: `build.yml` (the frontend and the images),
+`serve-dev.yml` and `serve-prod.yml` (one estate each). None is called more than once. The
+permissions became exact as a consequence - the single `deploy` job had to grant the UNION of what
+both halves needed, so build jobs ran with a token that could move release markers.
+
+**And the release kind is asked once** (user: *"faire la dichotomie plus tôt dans l'arborescence"*).
+It was resolved in `preflight`, then carried DOWN and re-tested in eight places, each callee
+re-deriving the same fork. It becomes an estate NAME at one fork in `release.yml`; below it nothing
+asks again, and neither estate workflow mentions a pre-release at all. The rename also collapsed the
+frontend URL cross-check from two branches into one comparison, `URL_ENVIRONMENT != ESTATE`, because
+both sides finally speak the same vocabulary.
+
+### Fixed - a busy Apple review queue no longer skips the production deploy
+
+**What it cost.** Apple gives an app ONE non-terminal version slot, so releasing faster than Apple
+reviews finds it held - the expected outcome, and not a failure of anything. `submit.mjs` refused
+correctly (cancelling a review is a human decision) but left through `exit 1`, exactly as it does
+for a real refusal. `production` is a SUCCESS dependency on the iOS arm, so **a busy queue skipped
+the web deploy three times running** - v0.16.2, v0.16.3 and v0.16.4 - and nobody read it, because a
+red iOS arm had become the normal look of a release. Production sat on v0.16.1 for three days while
+two releases reported themselves shipped; the third was the WASM outage, and its fix reached the web
+only because a human deployed it by hand.
+
+`chooseVersionSlot` had always separated `blocked` from `fail`. The caller threw both as a bare
+`Error`, so a distinction that existed as a TYPE could only be recovered by reading English prose.
+It now leaves by its own exit code (`EXIT_SLOT_HELD`, 75) and `ios.yml` reports it as a notice,
+green, with a job summary naming what holds the slot. Anything else still exits 1 and still stops
+the web. Not a `continue-on-error`, which would have swallowed the real refusals too.
+
 ## [0.16.5] - 2026-09-06
+
+### Incident - 2026-09-06, every web login refused in v0.16.4
+
+**ADMIN BYPASS TAKEN, and this paragraph is the record the rule asks for.** `gh pr merge 399
+--squash --admin` merged the fix without waiting for `CI passed`, on the user's explicit instruction
+("Bypass admin. C'est urgent"), because production was refusing every browser login at the time. No
+gate of `release-preflight.sh` was bypassed: the ordinary alpha-then-stable sequence was followed,
+and the only thing skipped was the branch ruleset's required check on the pull request.
+
+**What broke.** `prune_expired_key_packages` (#392, shipped in v0.16.4) reads
+`std::time::SystemTime::now()` from `load_or_create`. `mls-core` also compiles to
+`wasm32-unknown-unknown`, where that call is not implemented and PANICS. Every browser login unwound
+in MLS init, and the login path classified the failure as `auth_pin_mismatch` - so every user was
+told their correct PIN was wrong, account-wide.
+
+**Three things this incident proved about the delivery chain, none of them the panic itself.**
+
+1. **PRODUCTION HAD NOT BEEN DEPLOYED SINCE v0.16.1.** `Production estate` needs `[android, ios]` in
+   success, deliberately and correctly - but v0.16.2 and v0.16.3 both had a store arm fail, so both
+   were published, announced and never served to anybody. **Nothing said so.** The backlog carries
+   "nothing tells anybody prod is down"; this is its sibling and it is quieter - nothing tells
+   anybody prod did not MOVE.
+
+2. **THERE IS NO ROLLBACK.** `docker-compose.prod.yml` names its images `:latest`, so what
+   production runs is decided entirely by what that tag points at when `docker pull` runs.
+   Re-running v0.16.1's deploy job worked perfectly - every step green, GHCR authenticated, health
+   check passed - and redeployed **v0.16.4**, because `latest` is v0.16.4. A version can be shipped
+   and cannot be unshipped.
+
+3. **A GREEN DEPLOY AND AN HTTP 200 BOTH HELD THROUGHOUT.** The release run was green, both estates
+   answered 200, and every user was locked out. The rule already in `CLAUDE.md` - a green deploy
+   proves the containers started, never that the site answers - needs one more clause: **answering
+   is not working either.** Nothing in the campaign opens a session on a freshly deployed web build,
+   which is the first thing any real user does.
 
 ### Fixed
 

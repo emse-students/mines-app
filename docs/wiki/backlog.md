@@ -477,7 +477,7 @@ reasons, and a procedure has to answer both:
    cluster in a major-version subdirectory beneath it; this repository mounts `postgres_data` at
    `/var/lib/postgresql/data`. So `docker-compose.prod.yml`, `docker-compose.dev.yml` and
    `infrastructure/local/docker-compose.yml` all change shape, not just a tag - and the `pg_isready`
-   / `psql` invocations in `deploy.yml`'s migration step run inside that container.
+   / `psql` invocations in `serve-prod.yml`'s migration step run inside that container.
 
 **What retires this entry, and it is the same thing that lifts the refusal:** a test that starts the
 NEW major against a data directory written by the OLD one and proves the upgrade path carries it.
@@ -4730,6 +4730,49 @@ the map meanwhile so the board reconciles today.
 
 ### P1 - THE DEVICE PURGES 49 OF THE 50 PREKEYS IT HAS JUST PUBLISHED, SO THE POOL NEVER FILLS AND IT MINTS FIFTY MORE ON EVERY CONNECTION (measured on the Mi 9T, 2026-09-06 evening)
 
+#### THE POPULATION WAS MEASURED ON 2026-09-07, AND IT REFUTES HALF OF THE HEADLINE ABOVE
+
+*A predicate that named the last incident is not the predicate that names the next one.* The claim
+"**its pool is empty essentially always**" was read off ONE device's log lines, and it does not
+survive contact with the population. Two `GROUP BY`s, one per estate, both read-only:
+
+| | production | local estate |
+| --- | --- | --- |
+| devices with a `key_package` | 614 | 580 |
+| devices with at least one prekey | 582 | 543 |
+| devices with a pool of **exactly 50** | **437** | **413** |
+| devices with a pool of **5 or fewer** | **0** | **0** |
+| live (non-revoked) devices with **no** prekey | **32** (5.2%) | - |
+
+The tail is 49, 48, 47, 46, 45... which is what ordinary consumption by peers looks like. It is not
+what a purge loop looks like.
+
+**WHAT IS STILL TRUE, AND IT IS THE DEFECT.** The churn is real and the server proves it: the most
+recent Tauri device - `tauri-f7a9bb80...`, the account the harness drives, prekeys stamped
+`2026-09-06 19:46:44.16218` - holds 50, and **all fifty carry that single timestamp to the
+microsecond.** One batch, minted at one instant, with nothing older surviving beside it. An earlier
+batch was purged wholesale and this one replaced it. That is the loop, and it is exactly the waste
+that feeds the `mls.bin` growth entry: ~97 kB of bundles a round into a local store that sheds
+nothing under 84 days.
+
+**WHAT IS FALSE, AND IT CHANGES A SEVERITY.** The pool is *full at rest*, because the republish
+follows the purge within the same connection. So the consequence this entry drew - "an empty pool
+means the static fallback is served to EVERY peer, so #390's `last_resort` marking is load-bearing
+for the NORMAL path" - is wrong. It is load-bearing for **32 devices out of 614**, which is a real
+minority and a real reason to keep the marking, but it is not the normal path and it must stop being
+described as one.
+
+**SO THE DEFECT IS WASTE AND GROWTH, NOT AVAILABILITY.** Peers are being served prekeys, and the
+NoMatchingKeyPackage family this entry was feared to explain has to be explained by something else.
+The cause of the churn is still open, and the three candidates below stand - but the guard shipped in
+\#393 is now the instrument that will name it, because it prints `REFUSED` when the round-tripped
+bytes match what this session minted and `purged` when they do not. **Nobody has yet seen which line
+it prints on a device**, and that single observation settles candidate 1 against candidates 2 and 3.
+
+**THE 32 ARE THEIR OWN QUESTION**, and none of them is revoked. Whether they are dormant devices that
+never reconnected, or devices genuinely stuck with an empty pool, is unanswered - `MAX(createdAt)`
+per device against last-seen would settle it.
+
 **This is the engine under the 19.5 MB blob, and it was invisible until somebody counted the log
 lines.** One NOTIF-1b run, lasting a couple of minutes, with the raw logcat kept:
 
@@ -6072,3 +6115,103 @@ Three things must be settled BEFORE writing checks:
 
 **The eleven emoji rows belong to this campaign** - they are listed in the bundled-emoji-font
 entry above, which is their only copy.
+
+## THE DELIVERY CHAIN REVIEW - opened by the 2026-09-06 outage, agreed with the user the same night
+
+*"C'est peut-etre pour ca qu'apres la resolution rapide de ce probleme, il faut qu'on revoie le
+workflow"* (user, 2026-09-06), after an earlier exchange in which the complaint was READABILITY -
+*"C'est pas un peu alambique tout ces workflows ?"*. The outage turned that into five items that are
+DEMONSTRATED rather than argued. Ordered by value, which is not the order they were noticed in.
+
+**1. THERE IS NO ROLLBACK, AND THE ONE ATTEMPTED WAS GREEN WHILE DOING NOTHING.** P1.
+`infrastructure/docker-compose.prod.yml` names its images `:latest`, so what production runs is
+decided entirely by what that tag points at when `docker pull` runs. Re-running v0.16.1's
+`Deploy to Production Server` on 2026-09-06 passed **twenty steps**, authenticated to GHCR, migrated,
+health-checked, and redeployed **v0.16.4** - because `latest` is v0.16.4. A version can be shipped
+and cannot be unshipped. The pipeline ALREADY pushes an immutable `v${version}` tag
+(`deploy.yml`, `type=raw,value=v${{ inputs.version }}`); deploying by it would make re-running an old
+job a real rollback, which is the shape everybody already assumes it has.
+
+**2. A DEPLOYED ESTATE IS NOT ASKED WHETHER IT WORKS.** P1, and it is what let this reach users.
+The release run was green, `canari-emse.fr` and `dev.canari-emse.fr` both answered `HTTP 200`, and
+every login was refused. `CLAUDE.md` already says a green deploy proves the containers started and
+never that the site answers; **answering does not prove it works either**.
+`tools/cross-client-harness/deployed-wasm-check.mjs` was written during the incident and refuses an
+estate serving a wasm that can panic - it named `mls_wasm_bg.YXThuGSF.wasm` on production, the exact
+file in the user's stack trace, with no credentials and in seconds. It belongs after the dev deploy,
+where it would have stopped this build before production. It is NOT a login and must not be sold as
+one; the honest check is a real sign-in on the deployed build, and no campaign row does that.
+
+**3. NOTHING REPORTS THAT PRODUCTION DID NOT MOVE.** P2, sibling of the open "nothing tells anybody
+prod is down". `Production estate` needs `[android, ios]` in success - deliberately, and the reason
+is good: production must not serve a version a store has just refused. But a store arm failed on
+v0.16.2 AND v0.16.3, so both were published, announced, and served to nobody. **Production ran
+v0.16.1 from 2026-09-03 until this outage**, and the only reason anybody found out is that the next
+deploy broke. The `prod-released` marker already answers the question exactly; a release whose marker
+did not move is a release that did not ship, and that should be loud.
+
+**4. THE EMERGENCY PATH SHORTENS NOTHING.** P2, measured under real urgency. `gh pr merge --admin`
+skips the ruleset's required check on the PULL REQUEST; `release-preflight.sh` gate 3 then refuses
+the release because `CI passed` never ran on the commit - and the wait is for the same CI, later,
+after a failed release run. The bypass bought zero minutes and cost one refused run. Either write
+that down where somebody reaching for it will read it, or build a short path that is actually short.
+
+**5. THE RUN VIEW MISLED, AND IT IS FIXED (2026-09-07) - NOT SHIPPED UNTIL A RELEASE CARRIES IT.**
+Was P3. `deploy.yml` was called twice with a `phase` input and every job inside carried
+`if: inputs.phase == ...`, so the two calls contributed identically-named jobs and half of them were
+`skipped` for reasons the names did not carry - the user read
+`Production estate / Deploy to dev.canari-emse.fr: skipped` and could not tell which skip was normal.
+**MEASURED before the fix**, on `v0.16.4` (run 34057019347), the last stable to reach the end: 22
+rows, 5 skipped, and **4 of those 5 structurally impossible** rather than merely not taken.
+
+THE DEEPER FIX WAS THE ONE TAKEN, and this entry had already named it: *one small library workflow
+per target, which costs NOTHING in the Actions list*. `deploy.yml` is gone, replaced by `build.yml`,
+`serve-dev.yml` and `serve-prod.yml` - one file per thing done, each called at most once, so every
+row a release draws is a row that can run. The release kind moved with it: it was resolved in
+`preflight` and then carried DOWN and re-tested in eight places, and it is now ONE fork in
+`release.yml` producing an estate NAME (user, 2026-09-07: *"faire la dichotomie plus tot dans
+l'arborescence"*). Neither estate workflow mentions a pre-release at all any more.
+
+ASSERTED, so it cannot regress quietly: `release-chain.test.sh` fails if any workflow is called
+twice, if the estate is resolved anywhere but the one fork, or if either estate workflow starts
+reading the release kind again (121 assertions, all green). `deploy-env.test.sh` follows the `.env`
+to `serve-prod.yml` and the DEV_ secrets to `serve-dev.yml` (41 assertions). `ecosystem-shape`
+carries the measured reason the four repositories legitimately differ here: the other three deploy
+ONE estate, their `deploy.yml` declares no `phase` at all, and `release.yml` calls it once.
+
+**AND THE CONSTRAINT THAT SHAPED ALL OF IT, WHICH IS NOT TO BE RELITIGATED.** *"le moins de workflows
+differents possibles, ca inonde la console github"*. The complexity did not appear from nowhere: it
+moved from many files into few files with phases. Any proposal here must keep four visible workflows.
+
+**6. AUTO-MERGE STAYS ARMED DURING AN INCIDENT, AND IT NEARLY UNDID THE FIX.** P2, and it was luck
+rather than design that it did not. While production was down, PR #397 - which edits
+`mls-core/src/state.rs`, the file the hotfix was changing - merged itself on schedule. It landed
+BEFORE the hotfix, so the hotfix squashed on top and both guards survived; had the order been the
+other way round, a green auto-merge would have silently reverted a `cfg` that was holding every web
+login up, and nothing in the chain would have said so. The verification that caught it was a hand
+`grep` of `origin/main` after the fact. **Either arming is suspended while an incident is open, or a
+pull request touching a file the in-flight fix touches is held** - and the second needs no human
+switch, which makes it the better one.
+
+**AND THE HONEST CHECK FOR ITEM 2 CANNOT BE A CAMPAIGN ROW, WHICH IS WHY IT IS NOT ONE.** The rig has
+targeted the LOCAL estate since 2026-09-03, deliberately, so no row it could ever carry would have
+opened a session on `canari-emse.fr` or `dev.canari-emse.fr`. `deployed-wasm-check.mjs` closes the
+part that needs no account - and the next defect of this class may not be in the wasm at all, in
+which case it sees nothing. **The real check is a sign-in against the deployed estate, in the
+pipeline, right after the dev deploy and before the stable is allowed to proceed.**
+
+That needs a decision rather than code, which is why it stops here: a dedicated smoke account has to
+exist on both estates, its credentials have to be GitHub secrets, and somebody has to accept that a
+CI job holds a real login for a real user on production. **The alternative - that nobody signs in
+before users do - is what happened on 2026-09-06**, and it cost every user their access for the time
+it took one of them to report it.
+
+**7. AN INCIDENT WAITS BEHIND STORE ARTEFACTS IT DOES NOT NEED.** P3, measured on 2026-09-06.
+`release.yml` carries `concurrency: group: release, cancel-in-progress: false`, which is right - two
+releases running at once would race the bump and the markers. But `v0.16.5-alpha.2`, whose only job
+was to move `dev-deployed` one commit so the hotfix could ship, sat `pending` while
+`v0.16.5-alpha.1` finished building an APK and an IPA that nobody was waiting for. **The restoration
+of service was queued behind a TestFlight upload.** Whatever the fix is - a lane for a release whose
+estate work is done, cancelling a superseded pre-release's store arms, or simply knowing to cancel by
+hand - the thing to keep is that the serialisation is correct and only its GRANULARITY is wrong: the
+estate and the stores do not need the same lock.

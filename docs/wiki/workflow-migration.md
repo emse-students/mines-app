@@ -9,6 +9,16 @@ stories in `CHANGELOG.md`. When every box is ticked and every durable part has m
 page**, its row in `CLAUDE.md`'s WHERE THINGS LIVE, its queue item, and its line in
 [index](index.md).
 
+> **`deploy.yml` NO LONGER EXISTS, AND EVERY MENTION OF IT BELOW IS HISTORY (2026-09-07).** The file
+> this migration built was split into `build.yml`, `serve-dev.yml` and `serve-prod.yml`, because one
+> file behind a `phase: build | production` switch had to be CALLED TWICE - and GitHub draws every
+> job of a called workflow as a row in the run graph, including the ones that call's `if:` can never
+> satisfy. Measured on `v0.16.4`: 22 rows, 5 skipped, 4 of them structurally impossible. The release
+> kind moved with it, from eight tests spread down the tree to ONE fork in `release.yml` that
+> resolves an estate NAME. **Nothing below is edited for it**: a checked box records what was true
+> when it was ticked, and rewriting that would falsify the record. The current model is
+> [cicd](cicd.md#release-workflow), which is the only copy.
+
 The migration REPLACES the two-branch model that landed on 2026-09-02, hours before this. Nothing
 about that model is defended below: the user cancelled it the same day, and the parts of
 [dev-environment](infrastructure/dev-environment.md) that describe a `dev` BRANCH are wrong from the

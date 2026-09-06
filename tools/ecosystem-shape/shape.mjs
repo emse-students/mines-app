@@ -39,8 +39,29 @@ const REPOS = [
 
 /** The four workflows that have a row of their own in the Actions list, in every repository. */
 const VISIBLE = ['ci.yml', 'release.yml', 'arm-auto-merge.yml', 'scheduled.yml'];
-/** Called workflows: no trigger of their own, no row of their own. */
-const LIBRARIES = ['code-analysis.yml', 'deploy.yml'];
+/** Called workflows every repository has: no trigger of their own, no row of their own. */
+const LIBRARIES = ['code-analysis.yml'];
+
+/**
+ * THE DEPLOY LIBRARY IS NOT ONE FILE EVERYWHERE, AND THE DIVERGENCE WAS MEASURED (2026-09-07).
+ *
+ * Sky, MiGallery and Portail-etu each deploy ONE estate: `deploy.yml` is ~170 lines there, holds one
+ * or two jobs, declares no `phase` input at all, and `release.yml` calls it ONCE. They have nothing
+ * to split.
+ *
+ * Canari deploys TWO estates and gates production on both app stores, so its file was called TWICE
+ * with a `phase: build | production` switch. GitHub materialises EVERY job of a called workflow as a
+ * row in the run graph, including the jobs whose `if:` cannot hold on that call - so each call drew
+ * the other call's jobs as skipped rows that were INCAPABLE of running. Measured on `v0.16.4` (run
+ * 34057019347): 22 rows, 5 skipped, 4 of those 5 structurally impossible. It is three files there
+ * now, one per thing done: build the images, serve dev, serve production.
+ *
+ * SO THIS IS A REAL DIFFERENCE AND NOT DRIFT, and the homogeneity that was asked for is untouched:
+ * the FOUR VISIBLE workflows are identical everywhere, which is the property above, and a repository
+ * that grows a second estate should split the same way rather than be held to one file.
+ */
+const DEPLOY_LIBRARIES = { Canari: ['build.yml', 'serve-dev.yml', 'serve-prod.yml'] };
+const DEFAULT_DEPLOY_LIBRARIES = ['deploy.yml'];
 /** Canari ships to two app stores, which nothing else here does. */
 const CANARI_EXTRA_LIBRARIES = ['android.yml', 'ios.yml'];
 
@@ -100,7 +121,13 @@ for (const [label, dir] of REPOS) {
   // Both directions matter. A MISSING file is a capability one repository lost; an EXTRA one is
   // the thing the user asked to stop ("ca inonde la console github"), and it arrives one
   // well-meant afternoon at a time.
-  const expected = new Set([...VISIBLE, ...LIBRARIES, ...(label === 'Canari' ? CANARI_EXTRA_LIBRARIES : [])]);
+  const deployLibs = DEPLOY_LIBRARIES[label] ?? DEFAULT_DEPLOY_LIBRARIES;
+  const expected = new Set([
+    ...VISIBLE,
+    ...LIBRARIES,
+    ...deployLibs,
+    ...(label === 'Canari' ? CANARI_EXTRA_LIBRARIES : []),
+  ]);
   const missing = [...expected].filter((n) => !names.includes(n)).sort();
   const extra = names.filter((n) => !expected.has(n)).sort();
   if (missing.length) fail(label, `missing workflow(s): ${missing.join(', ')}`);
@@ -121,8 +148,10 @@ for (const [label, dir] of REPOS) {
       if (job['runs-on'] === 'self-hosted' && n !== 'scheduled.yml') {
         fail(label, `${n} (${jobName}) reaches a self-hosted runner from ${[...trig].sort().join(', ')}`);
       }
-      if (typeof job.uses === 'string' && job.uses.includes('deploy.yml')) {
-        fail(label, `${n} (${jobName}) calls deploy.yml from ${[...trig].sort().join(', ')}`);
+      // Every deploy library of THIS repository, not one hard-coded name: Canari has three.
+      const lib = typeof job.uses === 'string' ? deployLibs.find((d) => job.uses.includes(d)) : undefined;
+      if (lib) {
+        fail(label, `${n} (${jobName}) calls ${lib} from ${[...trig].sort().join(', ')}`);
       }
     }
   }

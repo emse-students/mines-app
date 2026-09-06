@@ -56,6 +56,26 @@ runs:
 
     # A cache that restores an empty directory would otherwise be found by a module-resolution
     # error three steps later, in a job that has nothing to do with crypto. Say it here.
+    #
+    # AND REFUSE A WASM THAT CAN PANIC, which is the same question one step further on: the file
+    # exists, and can it run? `mls-core` compiles for the host AND for wasm32, and a `std` API that
+    # is missing on wasm32 still COMPILES there - `cargo check --target wasm32-unknown-unknown` is
+    # green - then PANICS in the browser. v0.16.4 shipped `std::time::SystemTime::now()` inside
+    # `load_or_create` that way: every web login unwound in MLS init and the login path reported it
+    # as `auth_pin_mismatch`, so every user was told their correct PIN was wrong. Nothing between
+    # the merge and the outage could see it.
+    #
+    # `std` reaches those shims through its per-platform unsupported module, whose panics all carry
+    # one sentence, so this catches ANY missing API rather than the clock alone.
+    #
+    # NO `if:` ON THIS STEP, deliberately: it must also judge a CACHE HIT. The cache is keyed on the
+    # crate sources, so an entry stored before this check existed restores an unjudged artefact, and
+    # a gate that only runs on a rebuild is a gate a cache turns off.
+    #
+    # ONE IMPLEMENTATION, IN BASH, BECAUSE THIS IS THE ONE PLACE. This action is where every
+    # pipeline builds the file, and it installs no runtime of its own - a second copy in a
+    # `package.json` script would drift from this one on the day somebody edits the marker, and the
+    # drift is invisible until it matters.
     - name: Verify the artefact
       shell: bash
       run: |
@@ -64,3 +84,12 @@ runs:
           exit 1
         fi
         ls -l frontend/src/lib/wasm/
+        if grep -qa 'not implemented on this platform' frontend/src/lib/wasm/mls_wasm_bg.wasm; then
+          # `std` prefixes the sentence with the API's own name ("time", "random", ...), which is
+          # what turns this refusal into a lead rather than a verdict.
+          FOUND=$(grep -ao '.\{0,40\}not implemented on this platform' \
+                    frontend/src/lib/wasm/mls_wasm_bg.wasm | head -1 | tr -c '[:print:]' ' ')
+          echo "::error::The built WASM can panic on wasm32: ...${FOUND}. A std API that does not exist on this target still compiles for it and panics at runtime, in the browser, on a path no test here covers. Gate the call behind #[cfg(not(target_arch = \"wasm32\"))], or take the value it needs (a clock, an entropy source) as a parameter from the caller, which has one on every target. See CHANGELOG v0.16.5."
+          exit 1
+        fi
+        echo "wasm carries no unsupported-platform panic (cache-hit=${{ steps.cache.outputs.cache-hit }})"

@@ -68,9 +68,10 @@ on:
         description: 'Semver without the v (0.16.0, or 0.16.0-alpha.1 for a tester build)'
         required: true
 
-# TWO RELEASES MUST NOT OVERLAP. `deploy.yml` serialises the estates on its own account because it
-# reaches one machine; this group serialises the whole gesture, so an alpha and a stable published
-# minutes apart cannot interleave their bumps and push two versions over each other.
+# TWO RELEASES MUST NOT OVERLAP. The three deploy libraries share one `cd-deploy` group, because
+# all three reach the same machine; this group serialises the whole gesture, so an alpha and a
+# stable published minutes apart cannot interleave their bumps and push two versions over each
+# other.
 # `cancel-in-progress: false` for the same reason it is false down there: a killed release leaves a
 # tree bumped and unpushed, or an estate half recreated.
 concurrency:
@@ -317,7 +318,7 @@ jobs:
   # This file's top-level `permissions: contents: read` is the whole cause. It is correct for
   # `preflight` and for `bump` (which pushes with an App token, not with `GITHUB_TOKEN`), and it
   # silently capped all three arms - each of which asks for `contents: write` to attach an artefact
-  # to the release, and `deploy.yml` for `packages: write` to push images to GHCR. **The permissions
+  # to the release, and `build.yml` for `packages: write` to push images to GHCR. **The permissions
   # below are therefore derived from what each callee declares, not chosen here**, and
   # `release-chain.test.sh` reads both sides and fails if a callee ever asks for a scope its caller
   # does not grant.
@@ -326,37 +327,67 @@ jobs:
   # was no caller to cap anything, so every one of them simply got what it declared. Turning them
   # into called workflows introduced a ceiling that had never existed, and nothing in the tree said
   # so.
-  # `deploy.yml` IS CALLED TWICE, AND THE SPLIT IS THE POINT (user, 2026-09-03: *"j'aimerais que
-  # toutes les versions soient toujours alignees [...] on pourrait faire en sorte que le deploiement
-  # sur les stores et sur le web soit coordonne ?"*).
+  # THE FORK IS HERE, AND IT HAPPENS ONCE (user, 2026-09-07: *"faire la dichotomie plus tot dans
+  # l'arborescence"*).
   #
-  #   build       - the frontend, the images, and the DEV estate.  Starts at once, beside the two
-  #                 mobile arms, so nothing waits for anything it does not need.
-  #   production  - the production estate, and nothing else.  Needs `[android, ios]`, so the web
-  #                 cannot serve a version Google Play or Apple has just refused.
+  # WHAT IT REPLACED. `deploy.yml` was ONE file holding the build jobs AND both estates, called
+  # TWICE with `phase: build | production`. Every job of a called workflow becomes a row in the run
+  # graph even when its `if:` cannot hold on that call, so each call drew the other call's jobs as
+  # skipped rows. Measured on `v0.16.4` (run 34057019347), the last stable to reach the end: 22
+  # rows, 5 skipped, and 4 of those 5 STRUCTURALLY IMPOSSIBLE rather than merely not taken this
+  # time. A parameter that selects half a file produces the other half as dead rows, on every call.
   #
-  # WHY TWO CALLS RATHER THAN ONE `needs:`. A called workflow cannot depend on a job of its caller,
-  # and the two estates are jobs INSIDE `deploy.yml`; gating the single call on `[android, ios]`
-  # would hold `deploy-dev` back too, and gating nothing is where we were. Two calls of one file,
-  # told apart by `phase`, keeps ONE implementation of a deployment - the alternative was a second
-  # copy of the estate steps, which is the duplication this chain was rebuilt to remove.
+  # AND THE RELEASE KIND WAS ASKED EIGHT TIMES. `preflight` resolves it once and it was then carried
+  # DOWN as `prerelease` and re-tested in every callee, each re-deriving the same fork for itself.
+  # It becomes a NAME here - `dev` or `production` - and below this point nothing asks again:
+  # `serve-dev.yml` and `serve-prod.yml` contain no mention of a pre-release at all, and `build.yml`
+  # is simply told which estate it is building for.
   #
-  # THE SECOND CALL BUILDS NOTHING. The images were pushed to GHCR by the first, and `phase` skips
-  # every build job, so the cost of the split is the ~30 seconds a job takes to start.
-  deploy:
-    name: Estate
+  #   build       - the frontend and the images. ALWAYS, and the same work either way but for the
+  #                 estate it is told to build for. Starts beside the two mobile arms.
+  #   serve-dev   - the dev estate. Pre-releases only, and only where that estate is enabled.
+  #   serve-prod  - the production estate. Stables only, and only once BOTH stores took the version.
+  #
+  # THE TWO ESTATES STAY SEPARATE CALLS FOR THE REASON THE OLD SPLIT EXISTED: a called workflow
+  # cannot depend on a job of its caller, so `[android, ios]` is only expressible out here. What
+  # changed is that a call now names the estate it serves, instead of a phase that selects half of
+  # a file.
+  #
+  # AND THE PERMISSIONS ARE EXACT NOW, which the single call made impossible: `deploy` had to grant
+  # the UNION of what both halves needed - `contents: write` AND `packages: write` - so the build
+  # jobs ran with a token that could move release markers and the estate jobs with one that could
+  # push images. Each call below grants what its own callee declares and nothing more.
+  build:
+    name: Build
     needs: [preflight, bump]
-    # `contents: write` for the `prod-released` / `dev-deployed` markers it moves;
-    # `packages: write` to push the images it builds to GHCR.
     permissions:
-      contents: write
+      contents: read
       packages: write
-    uses: ./.github/workflows/deploy.yml
+    uses: ./.github/workflows/build.yml
     with:
       sha: ${{ needs.bump.outputs.sha }}
       version: ${{ needs.preflight.outputs.version }}
-      prerelease: ${{ needs.preflight.outputs.prerelease }}
-      phase: build
+      # THE ONE PLACE THE RELEASE KIND BECOMES AN ESTATE NAME. Everything downstream reads the name.
+      estate: ${{ needs.preflight.outputs.prerelease == 'true' && 'dev' || 'production' }}
+    secrets: inherit
+
+  # `vars.DEV_ENVIRONMENT_ENABLED` IS READ HERE AND NOWHERE ELSE. It used to be one clause of a
+  # six-line boolean inside the callee, where a disabled estate left nothing but a skipped job among
+  # four other skipped jobs. A repository variable and not a secret, deliberately: whether a second
+  # estate is being deployed is not a secret, and a silent gate is one nobody can debug.
+  serve-dev:
+    name: Dev estate
+    needs: [preflight, bump, build]
+    if: needs.preflight.outputs.prerelease == 'true' && vars.DEV_ENVIRONMENT_ENABLED == 'true'
+    permissions:
+      contents: write
+      packages: read
+    uses: ./.github/workflows/serve-dev.yml
+    with:
+      sha: ${{ needs.bump.outputs.sha }}
+      version: ${{ needs.preflight.outputs.version }}
+      services_args: ${{ needs.build.outputs.services_args }}
+      images_result: ${{ needs.build.outputs.images_result }}
     secrets: inherit
 
   android:
@@ -387,28 +418,35 @@ jobs:
 
   # THE WEB GOES LAST, AND ONLY IF BOTH STORES TOOK THE SAME VERSION.
   #
-  # `if:` RATHER THAN A SKIP INSIDE THE CALLEE, because a pre-release has no production estate at
-  # all: without this condition every alpha would spend a job starting a workflow whose only real
-  # job then refuses itself, and a run full of hollow greens is a run nobody reads.
+  # `needs: [build, android, ios]` IS A SUCCESS DEPENDENCY, deliberately: there is no `always()`
+  # here and there must not be one. A failed or cancelled mobile arm leaves this job `skipped`,
+  # production keeps serving the previous release, and the recovery is "Re-run failed jobs" on the
+  # run that already exists. What must NOT be done is adding `always()` and a result test, which is
+  # how a gate becomes a formality.
   #
-  # `needs: [android, ios]` IS A SUCCESS DEPENDENCY, deliberately: there is no `always()` here and
-  # there must not be one. A failed or cancelled mobile arm leaves this job `skipped`, production
-  # keeps serving the previous release, and the recovery is "Re-run failed jobs" on the run that
-  # already exists - the same door as every other half-failed deploy. What must NOT be done is
-  # adding `always()` and a result test, which is how a gate becomes a formality.
-  production:
+  # AND SINCE 2026-09-07 IT REFUSES ONLY WHAT A STORE ACTUALLY REFUSED. Apple gives an app ONE
+  # non-terminal version slot, so releasing faster than Apple reviews finds it busy - the expected
+  # outcome, and not a failure of anything. `submit.mjs` used to leave through `exit 1` for that
+  # exactly as it does for a real refusal, so a BUSY QUEUE skipped this deploy three times running
+  # (v0.16.2, v0.16.3, v0.16.4) and production sat on v0.16.1 for three days while two releases
+  # reported themselves shipped. The two outcomes are separate exit codes now, and `ios.yml` is
+  # green on a deferral. The dependency below finally means what it always claimed to.
+  #
+  # `if:` RATHER THAN A SKIP INSIDE THE CALLEE, because a pre-release has no production estate at
+  # all: without this condition every alpha would spend a job starting a workflow whose only job
+  # then refuses itself, and a run full of hollow greens is a run nobody reads.
+  serve-prod:
     name: Production estate
-    needs: [preflight, bump, deploy, android, ios]
+    needs: [preflight, bump, build, android, ios]
     if: needs.preflight.outputs.prerelease == 'false'
     permissions:
       contents: write
-      packages: write
-    uses: ./.github/workflows/deploy.yml
+      packages: read
+    uses: ./.github/workflows/serve-prod.yml
     with:
       sha: ${{ needs.bump.outputs.sha }}
       version: ${{ needs.preflight.outputs.version }}
-      prerelease: ${{ needs.preflight.outputs.prerelease }}
-      phase: production
+      services_args: ${{ needs.build.outputs.services_args }}
     secrets: inherit
 
   # =================================================================================================

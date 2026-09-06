@@ -3,7 +3,7 @@
 # Self-tests for infrastructure/deploy/render-env.sh and its manifest.
 #
 # THE ASSERTION THIS FILE EXISTS FOR is the first group: the expected key set is DERIVED from
-# `deploy.yml`, which is the thing that has always written production's .env. A key added there and
+# `serve-prod.yml`, which is the thing that has always written production's .env. A key added there and
 # forgotten in the manifest would otherwise be written by nobody, and the service would read the
 # template default in silence - the exact shape of defect this repository keeps paying for. The
 # failure mode of a guard list is an ABSENCE, so the list may not be hand-written.
@@ -23,7 +23,12 @@ cd "$(dirname "$0")/../../.." || exit 1
 
 RENDER="infrastructure/deploy/render-env.sh"
 MANIFEST="infrastructure/deploy/env-manifest.tsv"
-CD="./.github/workflows/deploy.yml"
+# THE ESTATE WORKFLOWS ARE TWO FILES SINCE 2026-09-07. `deploy.yml` held the build jobs AND both
+# estates behind a `phase` switch and was called twice, which drew every job of the other call as
+# a structurally impossible skipped row; it is `build.yml` + `serve-dev.yml` + `serve-prod.yml`
+# now. Production's `.env` is rendered in serve-prod; the DEV_ secrets are passed in serve-dev.
+CD_PROD="./.github/workflows/serve-prod.yml"
+CD_DEV="./.github/workflows/serve-dev.yml"
 
 PASS=0
 FAIL=0
@@ -97,17 +102,17 @@ manifest_field() {
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
-printf '\nthe manifest covers what deploy.yml writes - DERIVED, so an omission cannot pass\n'
+printf '\nthe manifest covers what serve-prod.yml writes - DERIVED, so an omission cannot pass\n'
 # ═════════════════════════════════════════════════════════════════════════════
 
-if [ ! -f "$CD" ]; then
-  fail "deploy.yml not found at $CD - the derivation below has no source"
+if [ ! -f "$CD_PROD" ]; then
+  fail "serve-prod.yml not found at $CD - the derivation below has no source"
 else
-  cd_keys="$(grep -oE 'upsert_env_var "[A-Z_0-9]+"' "$CD" | sed 's/upsert_env_var "//; s/"//' | sort -u)"
+  cd_keys="$(grep -oE 'upsert_env_var "[A-Z_0-9]+"' "$CD_PROD" | sed 's/upsert_env_var "//; s/"//' | sort -u)"
   if [ -z "$cd_keys" ]; then
-    fail "no upsert_env_var calls found in deploy.yml - if the deploy job was converted to render-env.sh, point this derivation at its manifest instead"
+    fail "no upsert_env_var calls found in serve-prod.yml - if the deploy job was converted to render-env.sh, point this derivation at its manifest instead"
   else
-    pass "deploy.yml names $(printf '%s\n' "$cd_keys" | wc -l | tr -d ' ') keys to derive from"
+    pass "serve-prod.yml names $(printf '%s\n' "$cd_keys" | wc -l | tr -d ' ') keys to derive from"
     missing=""
     while read -r key; do
       [ -z "$key" ] && continue
@@ -116,40 +121,40 @@ else
       fi
     done <<<"$cd_keys"
     if [ -n "$missing" ]; then
-      fail "deploy.yml writes these keys and the manifest does not carry them:$missing"
+      fail "serve-prod.yml writes these keys and the manifest does not carry them:$missing"
     else
-      pass "every key deploy.yml writes has a manifest row"
+      pass "every key serve-prod.yml writes has a manifest row"
     fi
   fi
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-printf '\ndeploy.yml passes every dev secret the manifest asks for - also DERIVED\n'
+printf '\nserve-dev.yml passes every dev secret the manifest asks for - also DERIVED\n'
 # ═════════════════════════════════════════════════════════════════════════════
 
 # The other direction of the same problem. `render-env.sh` reads `DEV_<NAME>` from its environment,
 # and GitHub only puts a secret there if the workflow names it - so a manifest row whose secret
-# `deploy.yml` never passes resolves to EMPTY. For a `required` row that fails the deploy loudly, which
+# `serve-dev.yml` never passes resolves to EMPTY. For a `required` row that fails the deploy loudly, which
 # is the correct direction; for a `warn` row it degrades silently, which is not. Either way the fix
-# is one line in `deploy.yml`, and this is what says so at CI time rather than at deploy time.
-if [ -f "$CD" ]; then
+# is one line in `serve-dev.yml`, and this is what says so at CI time rather than at deploy time.
+if [ -f "$CD_DEV" ]; then
   want_dev="$(manifest_rows | awk -F'\t' '$3 != "skip" && $4 ~ /^secret:/ { sub(/^secret:/, "", $4); print "DEV_" $4 }' | sort -u)"
   absent=""
   while read -r name; do
     [ -z "$name" ] && continue
-    grep -q "secrets\.${name} }}" "$CD" || absent="$absent $name"
+    grep -q "secrets\.${name} }}" "$CD_DEV" || absent="$absent $name"
   done <<<"$want_dev"
   if [ -n "$absent" ]; then
-    fail "deploy.yml never passes these dev secrets, so render-env.sh resolves them to empty:$absent"
+    fail "serve-dev.yml never passes these dev secrets, so render-env.sh resolves them to empty:$absent"
   else
-    pass "deploy.yml passes all $(printf '%s\n' "$want_dev" | wc -l | tr -d ' ') dev secrets the manifest names"
+    pass "serve-dev.yml passes all $(printf '%s\n' "$want_dev" | wc -l | tr -d ' ') dev secrets the manifest names"
   fi
 
   # And the reverse, which is the one that would leak: a bare production secret name inside the dev
   # deploy job. The whole isolation rests on dev's job seeing DEV_ names ONLY.
-  dev_job="$(awk '/^  deploy-dev:/{f=1} f && /^  [a-z-]+:$/ && !/^  deploy-dev:/{f=0} f' "$CD")"
+  dev_job="$(awk '/^  deploy-dev:/{f=1} f && /^  [a-z-]+:$/ && !/^  deploy-dev:/{f=0} f' "$CD_DEV")"
   if [ -z "$dev_job" ]; then
-    fail "could not locate the deploy-dev job in deploy.yml to audit its secret references"
+    fail "could not locate the deploy-dev job in serve-dev.yml to audit its secret references"
   else
     bare="$(printf '%s' "$dev_job" | grep -oE 'secrets\.[A-Z_0-9]+' | sed 's/secrets\.//' |
       grep -vE '^(DEV_|GITHUB_TOKEN$)' | sort -u | tr '\n' ' ')"
@@ -168,7 +173,7 @@ printf '\nthe two estates never publish the same host port\n'
 # THIS SECTION USED TO ASSERT THE WRONG THING, AND THE BUG IT MISSED SHIPPED. It read the four files
 # that NAME the dev frontend port and confirmed they all said 3080. They did. The value that actually
 # reached dev's .env came from a fifth file none of them was compared against -
-# `infrastructure/.env.example`, which declares production's 8080 - because the override in deploy.yml
+# `infrastructure/.env.example`, which declares production's 8080 - because the override in serve-dev.yml
 # was written `grep -q '^KEY=' .env || echo KEY=3080`, and the key is never absent from a file
 # rendered FROM that template. Four declarations agreeing is not the port the estate gets.
 #
@@ -268,7 +273,7 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
-printf '\nproduction renders exactly what deploy.yml rendered\n'
+printf '\nproduction renders exactly what serve-prod.yml rendered\n'
 # ═════════════════════════════════════════════════════════════════════════════
 
 out="$TMP/prod.env"
@@ -281,18 +286,18 @@ else
   pass "a complete production environment renders"
 
   got="$(grep '^ALLOW_ORIGIN=' "$out" | head -1)"
-  # The value deploy.yml computed, with its one interpolation resolved the way env.DOMAIN resolves.
-  want_raw="$(grep -oE 'upsert_env_var "ALLOW_ORIGIN" "[^"]*"' "$CD" | sed 's/.*"ALLOW_ORIGIN" "//; s/"$//')"
+  # The value serve-prod.yml computed, with its one interpolation resolved the way env.DOMAIN resolves.
+  want_raw="$(grep -oE 'upsert_env_var "ALLOW_ORIGIN" "[^"]*"' "$CD_PROD" | sed 's/.*"ALLOW_ORIGIN" "//; s/"$//')"
   if [ -z "$want_raw" ]; then
-    fail "could not read deploy.yml's ALLOW_ORIGIN to compare against"
+    fail "could not read serve-prod.yml's ALLOW_ORIGIN to compare against"
   else
     want="ALLOW_ORIGIN=$(printf '%s' "$want_raw" |
       sed 's|\${{ env.DOMAIN }}|canari-emse.fr|g; s|\$FRONTEND_URL|https://canari-emse.fr|g')"
     if [ "$got" = "$want" ]; then
-      pass "ALLOW_ORIGIN is byte-identical to the value deploy.yml built"
+      pass "ALLOW_ORIGIN is byte-identical to the value serve-prod.yml built"
     else
       fail "ALLOW_ORIGIN changed"
-      printf '       deploy.yml: %s\n       render: %s\n' "$want" "$got"
+      printf '       serve-prod.yml: %s\n       render: %s\n' "$want" "$got"
     fi
   fi
 
@@ -494,8 +499,8 @@ for wf in .github/workflows/*.yml; do
   grep -q 'runs-on: self-hosted' "$wf" || continue
   name="$(basename "$wf")"
 
-  # A workflow-level group covers every job in the file, which is the right shape for `deploy.yml`:
-  # its two estate jobs must not overlap with each other either.
+  # A workflow-level group covers every job in the file, which is the right shape for the three
+  # deploy libraries: they share one group, so no two of them overlap either.
   if grep -q '^concurrency:' "$wf"; then
     group="$(grep -A2 '^concurrency:' "$wf" | sed -n 's/^ *group: *//p' | head -1)"
     pass "$name serialises the whole file (group: $group)"
@@ -525,11 +530,16 @@ done
 # A killed run leaves containers half-recreated and the checkout on a commit whose images were never
 # pulled - a state no later run is written to recognise. Asserted separately from the group's
 # presence because `cancel-in-progress: true` would satisfy the check above while doing the harm.
-if grep -A2 '^concurrency:' "$CD" | grep -q 'cancel-in-progress: false'; then
-  pass "the deploy workflow queues behind a running deploy instead of killing it"
-else
-  fail "deploy.yml does not declare 'cancel-in-progress: false' - a cancelled deploy leaves the estate in whatever state the kill found"
-fi
+# THREE FILES SINCE 2026-09-07, AND ALL THREE MUST SAY IT. They share one `cd-deploy` group so
+# that splitting the file changed nothing about what may overlap; a file that forgot the word
+# would silently leave that group killable, which is the harm this asserts against.
+for wf in build serve-dev serve-prod; do
+  if grep -A2 '^concurrency:' ".github/workflows/$wf.yml" | grep -q 'cancel-in-progress: false'; then
+    pass "$wf.yml queues behind a running deploy instead of killing it"
+  else
+    fail "$wf.yml does not declare 'cancel-in-progress: false' - a cancelled deploy leaves the estate in whatever state the kill found"
+  fi
+done
 
 printf '\n'
 if [ "$FAIL" -ne 0 ]; then

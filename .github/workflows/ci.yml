@@ -289,10 +289,16 @@ jobs:
           # its self-test lives beside it rather than under `.github/`, and the release preflight
           # calls `submit.mjs --check-notes` as its fifth gate. So the commit that must run it is a
           # change to the submission script - which the first pattern here would never match.
+          #
+          # SO IS `tools/store-divergence/`, and so are the THREE estate workflows. This list named
+          # `deploy.yml` until 2026-09-07 - a file that no longer exists - and named none of the
+          # three that replaced it, so a change to the PRODUCTION ESTATE would not have run the
+          # suite that guards it. A pattern is only evidence for the tree it was written against.
           if has '^\.github/scripts/' \
             || has '^tools/app-store/' \
+            || has '^tools/store-divergence/' \
             || has '^infrastructure/(docker-compose\.(prod|dev)\.yml|dev/|local/|deploy/|\.env\.example)' \
-            || has '^\.github/workflows/(release|deploy|android|ios)\.yml$' \
+            || has '^\.github/workflows/(release|build|serve-dev|serve-prod|android|ios|scheduled)\.yml$' \
             || has '^scripts/bump-app-version\.sh$' \
             || has '\.md$' \
             || has '^Makefile'; then

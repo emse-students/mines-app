@@ -18,7 +18,7 @@ make a gesture as unfindable as leaving it out entirely.
 
 One GESTURE each, or the vocabulary a gesture is built from. An atom ends on a fact rather than a clock, reads before it acts so a second call is a read, and addresses the product structurally rather than by pixel or wording. See [`atoms.mjs`](atoms.mjs) for the contract and the grouped inventory.
 
-51 scripts.
+52 scripts.
 
 | script | what it is |
 |---|---|
@@ -34,6 +34,7 @@ One GESTURE each, or the vocabulary a gesture is built from. An atom ends on a f
 | `comm.mjs` | The vocabulary the COMM phase is written in: communities, channels, invitations, roles. |
 | `debris.mjs` | THE ONE ALLOWLIST OF THROWAWAY GROUP NAMES, shared by every sweep that may delete one. |
 | `deploy.mjs` | WAS PRODUCTION REDEPLOYED WHILE THE CHECK WAS RUNNING? - the one cause of transport failure that |
+| `deployed-wasm-check.mjs` | Asks a DEPLOYED estate whether the `mls-core` WebAssembly it serves can panic on the target it |
 | `device-census.mjs` | THE PURE HALF OF THE DEVICE CENSUS - the SQL text, and every function that turns one of its rows |
 | `device.mjs` | WHICH CLIENT AN ATOM IS ABOUT, resolved once, in one place. |
 | `devices.mjs` | THE DEVICE CENSUS - every device the platform knows, with its runtime, OS, app version, owner, |
@@ -237,4 +238,4 @@ They live under `archive/` but they are NOT questions - they take no verdict. Ru
 
 ---
 
-176 scripts in total.
+177 scripts in total.

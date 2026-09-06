@@ -142,7 +142,7 @@ Two things the first deployment got wrong, both worth keeping in mind for any fu
   routed by an exact `location = /` straight to `@ssr` - without one, `try_files $uri` on `/` tests
   a directory, falls into the index module and answers 403.
 
-The two images are built from one artifact and deployed together (`deploy.yml` rebuilds both whenever
+The two images are built from one artifact and deployed together (`build.yml` rebuilds both whenever
 either changes) - deploying only one ships an nginx whose assets do not match the server's.
 
 ### When `frontend-ssr` is down: `@app_shell`

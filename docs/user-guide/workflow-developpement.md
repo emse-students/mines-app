@@ -31,7 +31,7 @@ secrets.
 | rien (un simple merge) | rien | rien |
 
 **Ce qui distingue les deux, c'est le tiret dans le numero de version.** Pas une case a cocher sur
-GitHub, pas une branche : `deploy.yml` relit la version dans `frontend/package.json` apres le bump, et
+GitHub, pas une branche : `build.yml` relit la version dans `frontend/package.json` apres le bump, et
 un tiret dedans **est** la definition d'une pre-release. Le meme test est dans
 `scripts/bump-app-version.sh`. Une seule source de verite, donc pas de desaccord possible entre ce
 qui est construit et ce qui est deploye.
@@ -179,7 +179,9 @@ Ensuite, sans intervention :
 |---|---|
 | `preflight` | cinq verifications. **Si l'une refuse, rien ne bouge du tout** : pas de bump, pas de deploiement, aucun store. Voir 4.0 |
 | `bump` | ecrit la version dans `package.json`, les `Cargo.toml`, la config Tauri et le projet iOS, calcule les numeros de build des stores, pousse sur `main`, et **fixe le commit** que les trois bras ci-dessous construiront |
-| `deploy.yml` | reconstruit ce qui a change depuis la release **de meme nature**, deploie l'estate (dev pour une alpha, production pour une stable) |
+| `build.yml` | reconstruit ce qui a change depuis la release **de meme nature**, pour l'estate qu'on lui nomme |
+| `serve-dev.yml` | deploie `dev.canari-emse.fr`. Appele pour une alpha, jamais pour une stable |
+| `serve-prod.yml` | deploie la production. Appele pour une stable, et seulement une fois les DEUX stores servis |
 | `android.yml` | `.aab` signe -> Play, piste `internal` pour une alpha, `production` pour une stable |
 | `ios.yml` | `.ipa` -> App Store Connect via `altool`. Pour une **alpha**, ca s'arrete la et les testeurs internes voient le build. Pour une **stable**, la version App Store est creee, le build y est rattache, les notes sont ecrites et **le tout est soumis a validation Apple** - plus aucun geste manuel |
 
@@ -384,7 +386,7 @@ docker compose -f canari/infrastructure/docker-compose.prod.yml ps
 > bien l'un que l'autre.
 
 **Rejouer un deploiement a moitie rate**, c'est "Re-run failed jobs" sur le run qui existe deja.
-`deploy.yml` n'a **pas** de `workflow_dispatch` : ce serait une deuxieme porte vers la machine, et une
+Aucune des trois bibliotheques de deploiement n'a de `workflow_dispatch` : ce serait une deuxieme porte vers la machine, et une
 deuxieme porte est exactement ce que la migration a supprime.
 
 ---

@@ -42,6 +42,52 @@ import { readFileSync, existsSync } from 'node:fs';
 const API = 'https://api.appstoreconnect.apple.com';
 const PLATFORM = 'IOS';
 
+/**
+ * THE SUBMISSION DID NOT HAPPEN, AND THAT IS NOT A FAILURE. Apple gives an app ONE non-terminal
+ * version slot. A release published while the previous one is still WAITING_FOR_REVIEW, IN_REVIEW
+ * or PENDING_DEVELOPER_RELEASE finds that slot held, and cancelling a review is a human decision a
+ * release script must never take - so it stops, and stopping is the CORRECT outcome.
+ *
+ * WHY THIS IS A TYPE AND NOT A MESSAGE. `chooseVersionSlot` has always separated `blocked` from
+ * `fail`; the caller collapsed both into `throw new Error(slot.why)`, so both left through exit 1
+ * and a workflow could only tell them apart by reading English prose - a distinction exactly one
+ * call site would ever make. Three iOS jobs went red that way (v0.16.2, v0.16.3, v0.16.4) for the
+ * one outcome that is GUARANTEED whenever we release faster than Apple reviews. A red run whose
+ * cause is "working as designed" is noise, and this noise hid a store arm genuinely failing for
+ * three days: production sat on v0.16.1 while two releases reported themselves shipped.
+ */
+export class SlotHeldError extends Error {
+  /** @param {string} why */
+  constructor(why) {
+    super(why);
+    this.name = 'SlotHeldError';
+  }
+}
+
+/**
+ * "Nothing was submitted, and nothing is wrong." 75 is sysexits' EX_TEMPFAIL - *the user is invited
+ * to retry* - which is exactly this case. Everything the caller must ACT on still leaves through 1.
+ */
+export const EXIT_SLOT_HELD = 75;
+
+/**
+ * How a failed run leaves: the code the shell sees, and the one line it prints.
+ *
+ * Pure, exported and tested, because the alternative is asserting an exit code by spawning a script
+ * that talks to Apple. The workflow step reads the CODE, never the text.
+ *
+ * @param {unknown} e
+ * @returns {{code: number, line: string}}
+ */
+export function exitFor(e) {
+  if (e instanceof SlotHeldError)
+    return { code: EXIT_SLOT_HELD, line: `::notice::App Store submission deferred - ${e.message}` };
+  return {
+    code: 1,
+    line: `::error::App Store submission failed - ${e instanceof Error ? e.message : String(e)}`,
+  };
+}
+
 /** Apple's own limit on the release-notes field. Longer text is refused by the API, not truncated. */
 // THE TIGHTEST OF THE THREE DESTINATIONS, WHICH IS PLAY'S - not Apple's 4000, even though this
 // file is the App Store tool. The notes went to one store when this constant was written; since
@@ -77,7 +123,27 @@ const BUILD_TERMINAL_BAD = new Set(['INVALID', 'FAILED']);
  * The version states an automated run may write into. Anything else is a version a human is
  * already working on, or one the store has published, and both are answers rather than obstacles.
  */
-const VERSION_EDITABLE = new Set([
+/**
+ * APPLE SAID NO, WHICH IS NOT THE SAME AS NOBODY HAVING ASKED YET.
+ *
+ * These four are inside `VERSION_EDITABLE` below and that is correct for the question IT asks -
+ * *may this release write into the slot?* - where a rejected version and an unsubmitted one are
+ * equally writable. They are a set of their own because a second reader asks a different
+ * question. `tools/store-divergence/` reports why the last stable has not reached a store, and
+ * "Apple refused it" and "it was never submitted" are the two causes a human acts on
+ * differently: one needs a fix, the other needs a re-run. A report that cannot separate the
+ * causes it names is a report somebody has to reproduce by hand.
+ *
+ * ONE LIST, SPREAD INTO THE UNION BELOW, so the two readers cannot drift apart.
+ */
+export const VERSION_REJECTED = new Set([
+  'DEVELOPER_REJECTED',
+  'REJECTED',
+  'METADATA_REJECTED',
+  'INVALID_BINARY',
+]);
+
+export const VERSION_EDITABLE = new Set([
   'PREPARE_FOR_SUBMISSION',
   // `READY_FOR_REVIEW` IS NOT A VERSION APPLE HAS. It is a version that has been ATTACHED to a
   // review submission nobody has sent - the state the App Store Connect UI leaves behind when a
@@ -91,13 +157,10 @@ const VERSION_EDITABLE = new Set([
   // the previous release because it is gated on both stores. An occupied slot nobody can free
   // without a click blocks EVERY later stable, which is the queue this project does not keep.
   'READY_FOR_REVIEW',
-  'DEVELOPER_REJECTED',
-  'REJECTED',
-  'METADATA_REJECTED',
-  'INVALID_BINARY',
+  ...VERSION_REJECTED,
 ]);
-const VERSION_IN_REVIEW = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE']);
-const VERSION_DONE = new Set([
+export const VERSION_IN_REVIEW = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE']);
+export const VERSION_DONE = new Set([
   'READY_FOR_SALE',
   'PENDING_APPLE_RELEASE',
   'PROCESSING_FOR_APP_STORE',
@@ -588,7 +651,10 @@ async function main() {
     log('done.');
     return;
   }
-  if (slot.action === 'fail' || slot.action === 'blocked') throw new Error(slot.why);
+  if (slot.action === 'fail') throw new Error(slot.why);
+  // NOT AN ERROR, AND NOT AN exit 1: the slot is held by a version that is with Apple, which is the
+  // expected outcome of releasing faster than Apple reviews. See `SlotHeldError`.
+  if (slot.action === 'blocked') throw new SlotHeldError(slot.why);
 
   let version = null;
 
@@ -727,9 +793,8 @@ async function main() {
 // Only when run, so the decisions above can be imported by the test without reaching Apple.
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('submit.mjs')) {
   main().catch((e) => {
-    process.stderr.write(
-      `::error::App Store submission failed - ${e instanceof Error ? e.message : String(e)}\n`
-    );
-    process.exit(1);
+    const { code, line } = exitFor(e);
+    process.stderr.write(`${line}\n`);
+    process.exit(code);
   });
 }
