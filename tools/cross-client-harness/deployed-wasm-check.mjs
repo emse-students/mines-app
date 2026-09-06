@@ -22,13 +22,19 @@
  *   bun deployed-wasm-check.mjs https://dev.canari-emse.fr
  */
 
+import { SITE } from './names.mjs';
+
 /** The sentence every `std` unsupported-platform panic ends with. */
 const MARKER = 'not implemented on this platform';
 
 /** How many levels of JS chunk to follow before giving up on finding the wasm reference. */
 const MAX_DEPTH = 3;
 
-const base = (process.argv[2] ?? 'https://dev.canari-emse.fr').replace(/\/+$/, '');
+// THE ESTATE COMES FROM `SITE`, NEVER FROM A LITERAL, and `origin-selftest.mjs` is what says so.
+// A rule anchored on a spelt origin does not FAIL when the estate moves - it ANSWERS, about a host
+// nobody is testing any more. An explicit argument still wins, because this tool is also how a
+// human asks one particular deployment whether the wasm it serves can panic.
+const base = (process.argv[2] ?? SITE).replace(/\/+$/, '');
 
 /** Fetches `url` as text, or `null` when it cannot be read - a chunk that 404s is not fatal. */
 async function text(url) {

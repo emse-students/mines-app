@@ -4730,6 +4730,49 @@ the map meanwhile so the board reconciles today.
 
 ### P1 - THE DEVICE PURGES 49 OF THE 50 PREKEYS IT HAS JUST PUBLISHED, SO THE POOL NEVER FILLS AND IT MINTS FIFTY MORE ON EVERY CONNECTION (measured on the Mi 9T, 2026-09-06 evening)
 
+#### THE POPULATION WAS MEASURED ON 2026-09-07, AND IT REFUTES HALF OF THE HEADLINE ABOVE
+
+*A predicate that named the last incident is not the predicate that names the next one.* The claim
+"**its pool is empty essentially always**" was read off ONE device's log lines, and it does not
+survive contact with the population. Two `GROUP BY`s, one per estate, both read-only:
+
+| | production | local estate |
+| --- | --- | --- |
+| devices with a `key_package` | 614 | 580 |
+| devices with at least one prekey | 582 | 543 |
+| devices with a pool of **exactly 50** | **437** | **413** |
+| devices with a pool of **5 or fewer** | **0** | **0** |
+| live (non-revoked) devices with **no** prekey | **32** (5.2%) | - |
+
+The tail is 49, 48, 47, 46, 45... which is what ordinary consumption by peers looks like. It is not
+what a purge loop looks like.
+
+**WHAT IS STILL TRUE, AND IT IS THE DEFECT.** The churn is real and the server proves it: the most
+recent Tauri device - `tauri-f7a9bb80...`, the account the harness drives, prekeys stamped
+`2026-09-06 19:46:44.16218` - holds 50, and **all fifty carry that single timestamp to the
+microsecond.** One batch, minted at one instant, with nothing older surviving beside it. An earlier
+batch was purged wholesale and this one replaced it. That is the loop, and it is exactly the waste
+that feeds the `mls.bin` growth entry: ~97 kB of bundles a round into a local store that sheds
+nothing under 84 days.
+
+**WHAT IS FALSE, AND IT CHANGES A SEVERITY.** The pool is *full at rest*, because the republish
+follows the purge within the same connection. So the consequence this entry drew - "an empty pool
+means the static fallback is served to EVERY peer, so #390's `last_resort` marking is load-bearing
+for the NORMAL path" - is wrong. It is load-bearing for **32 devices out of 614**, which is a real
+minority and a real reason to keep the marking, but it is not the normal path and it must stop being
+described as one.
+
+**SO THE DEFECT IS WASTE AND GROWTH, NOT AVAILABILITY.** Peers are being served prekeys, and the
+NoMatchingKeyPackage family this entry was feared to explain has to be explained by something else.
+The cause of the churn is still open, and the three candidates below stand - but the guard shipped in
+\#393 is now the instrument that will name it, because it prints `REFUSED` when the round-tripped
+bytes match what this session minted and `purged` when they do not. **Nobody has yet seen which line
+it prints on a device**, and that single observation settles candidate 1 against candidates 2 and 3.
+
+**THE 32 ARE THEIR OWN QUESTION**, and none of them is revoked. Whether they are dormant devices that
+never reconnected, or devices genuinely stuck with an empty pool, is unanswered - `MAX(createdAt)`
+per device against last-seen would settle it.
+
 **This is the engine under the 19.5 MB blob, and it was invisible until somebody counted the log
 lines.** One NOTIF-1b run, lasting a couple of minutes, with the raw logcat kept:
 

@@ -240,11 +240,12 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    now refuses rather than passes**: a fresh device reaches every group with NOTHING online, so the
    rows that watch a responder heal one have no window left and need a group the device cannot
    self-serve ([backlog](docs/wiki/backlog.md)).
-2. **P1 - A DEVICE PUBLISHES 50 PREKEYS AND PURGES ALL 50, SO ITS POOL IS EMPTY ESSENTIALLY
-   ALWAYS** - `count=50 / deleted=50` off the server on a swept estate, `needed=50` client-side.
-   The guard shipped (#393) refuses on PROVENANCE, never a proportion; **the CAUSE is still open**
-   and mls-core is exonerated by test. An empty pool means the static fallback is served to every
-   peer, so #390's `last_resort` marking is load-bearing for the NORMAL path
+2. **P1 - A DEVICE REPLACES ITS WHOLE PREKEY BATCH ON EVERY CONNECTION, AND THAT CHURN GROWS
+   `mls.bin`** - P1 for the 48-second checkpoint it feeds, NOT because pools run dry. **Measured
+   2026-09-07, both estates: half the old headline is refuted** - the pool is FULL at rest (prod 437
+   of 614 devices at exactly 50, ZERO below 6), and one device's 50 all carry ONE timestamp to the
+   microsecond, which is the churn. `last_resort` is load-bearing for **32 devices**, not the normal
+   path. **CAUSE STILL OPEN**; #393's guard names it and nobody has seen which line it prints
    ([backlog](docs/wiki/backlog.md)).
 3. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).

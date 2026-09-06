@@ -86,17 +86,17 @@ derives it from the running pid every time and refuses to report success until C
 
 ## Running it
 
-`run.mjs` is the one way in. It refuses to start a phase whose devices are not ready, and it reads
+`archive/run.mjs` is the one way in. It refuses to start a phase whose devices are not ready, and it reads
 verdicts back from the record rather than off stdout, because several scripts print a raw observation
 dump *after* their verdict.
 
 ```
-bun run.mjs                      what exists, what is covered, what is not
-bun run.mjs MSG                  every script of one phase
-bun run.mjs MSG TYPE READ        several phases, in order
-bun run.mjs FWD --repeat 5       five passes, with a cross-pass table and a per-pass server window
-bun run.mjs --file msg3.mjs      one script, still with the preflight
-bun run.mjs --preflight W1 A1    the rig check ALONE, no script, no verdict
+bun archive/run.mjs                      what exists, what is covered, what is not
+bun archive/run.mjs MSG                  every script of one phase
+bun archive/run.mjs MSG TYPE READ        several phases, in order
+bun archive/run.mjs FWD --repeat 5       five passes, with a cross-pass table and a per-pass server window
+bun archive/run.mjs --file msg3.mjs      one script, still with the preflight
+bun archive/run.mjs --preflight W1 A1    the rig check ALONE, no script, no verdict
 ```
 
 `checks.mjs` is the manifest - which script covers which phase, and which devices each phase needs.
@@ -641,7 +641,7 @@ next one's symptom names the wrong cause.
 - **A phone `offline` in adb is a HUMAN action, and no `adb reconnect` clears it.** The screen has to
   be unlocked and the authorisation prompt accepted on the device itself.
 - A fresh install is a NEW PROCESS, so the old devtools forward is dead and `pin.mjs --device A1`
-  alone reports `ECONNREFUSED`. `bun run.mjs --preflight A1` forwards, foregrounds, sends the app to
+  alone reports `ECONNREFUSED`. `bun archive/run.mjs --preflight A1` forwards, foregrounds, sends the app to
   `/chat` (the PIN gate does not mount on `/posts`) and unlocks - use it rather than the pieces.
 - A Kotlin-only change does **not** need the Tauri build: `gradlew :app:assembleUniversalDebug` in
   `gen/android` packages the assets already on disk. The unit-test variants are
@@ -657,8 +657,13 @@ next one's symptom names the wrong cause.
 ### `deployed-wasm-check.mjs` - ask a DEPLOYED estate whether its wasm can panic
 
 ```sh
-bun deployed-wasm-check.mjs https://dev.canari-emse.fr    # 0 clean, 1 refused, 2 could not look
+bun deployed-wasm-check.mjs                 # the estate SITE names   0 clean, 1 refused, 2 could not look
+bun deployed-wasm-check.mjs https://...     # one particular deployment
 ```
+
+The estate comes from `SITE`, never from a literal: a rule anchored on a spelt origin does not FAIL
+when the estate moves, it ANSWERS - about a host nobody is testing any more. `origin-selftest.mjs`
+is the gate that says so, and it caught this file the day it was written.
 
 Walks the JS chunk graph from the landing page, finds the `mls_wasm_bg.<hash>.wasm` the app would
 load, downloads it, and refuses if it carries `std`'s unsupported-platform panic text.
