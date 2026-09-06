@@ -29,6 +29,7 @@ import {
   resetSendRatchetLedger,
   snapshotEmitted,
 } from '$lib/mls-client/sendRatchetLedger';
+import { fingerprintKeyPackage } from '$lib/mls-client/keyPackages';
 import type {
   DeviceMembershipRow,
   HistoryRequestOutcome,
@@ -273,6 +274,17 @@ export abstract class BaseMlsService implements IMlsService {
   protected initPromise: Promise<void> | null = null;
   /** True when MLS is initialized without an existing state blob (fresh device). */
   protected freshStart = false;
+
+  /**
+   * Fingerprints of every key package THIS process has published, so
+   * {@link reconcilePublishedKeyPackages} can never purge one of them.
+   *
+   * Per-process and deliberately not durable: the claim it supports is "this process minted these
+   * bytes and therefore holds their private key", which is only true of this process. A durable
+   * version would assert something it cannot know after a restart, which is precisely the mistake
+   * the guard exists to catch.
+   */
+  private readonly publishedThisSession = new Set<string>();
   /** Epoch ms of the last {@link republishKeyMaterial} run, used to debounce it. */
   private lastKeyMaterialRepublish = 0;
 
@@ -1906,12 +1918,46 @@ export abstract class BaseMlsService implements IMlsService {
     if (published.length === 0) return;
 
     const orphanIds: string[] = [];
+    let disownedOwnMints = 0;
     for (const { id, keyPackage } of published) {
       try {
-        if (!(await this.keyPackageHasPrivate(keyPackage))) orphanIds.push(id);
+        if (await this.keyPackageHasPrivate(keyPackage)) continue;
+
+        // A PACKAGE THIS SESSION PUBLISHED IS NEVER AN ORPHAN, AND SAYING SO IS THE WHOLE GUARD.
+        //
+        // Measured on the Mi 9T on 2026-09-06: `needed=49` on every connection, and immediately
+        // after each top-up `purged 49/50 orphaned prekey(s)` - the device throwing away the very
+        // packages it had just minted, so the pool never filled and it minted fifty more next
+        // time. ~97 kB of bundles a round into a state nothing prunes below 84 days; `mls.bin`
+        // grew 1.26 MB in a day and a checkpoint went from 17 s to 48 s.
+        //
+        // A SHARE-BASED FLOOR WOULD BE WRONG HERE. A device restored from an older backup has
+        // genuinely lost every private key, and purging 50 of 50 is exactly what this function is
+        // for - so "too many" cannot be the test. What separates the loop from the legitimate case
+        // is not the proportion but the PROVENANCE: this process minted these bytes, so it holds
+        // the private key by construction, and a `false` about one of them is never evidence about
+        // the server. It is evidence that the seam between minting and asking is broken.
+        //
+        // So it is refused and ACCUSED rather than executed. The cause is still open
+        // (`docs/wiki/backlog.md`); what this closes is the silence - a reconciliation undoing its
+        // own top-up looked exactly like a reconciliation doing its job.
+        if (this.publishedThisSession.has(fingerprintKeyPackage(keyPackage))) {
+          disownedOwnMints++;
+          continue;
+        }
+        orphanIds.push(id);
       } catch {
         // KeyPackage not locally deserializable/validatable: don't purge it.
       }
+    }
+
+    if (disownedOwnMints > 0) {
+      console.error(
+        `[MLS] reconcilePublishedKeyPackages: REFUSED to purge ${disownedOwnMints}/${published.length} prekey(s) ` +
+          'this session published itself - the device cannot back a package it just minted, which is a broken ' +
+          'seam between minting and asking, NOT a server orphan. Purging them is the loop that empties the pool ' +
+          'and mints fifty more on every connection (see backlog: the prekey purge loop).'
+      );
     }
 
     if (orphanIds.length > 0) {
@@ -1943,6 +1989,7 @@ export abstract class BaseMlsService implements IMlsService {
   }
 
   async publishKeyPackages(packages: Uint8Array[]): Promise<void> {
+    for (const kp of packages) this.publishedThisSession.add(fingerprintKeyPackage(kp));
     return this.delivery.publishKeyPackages(packages);
   }
 

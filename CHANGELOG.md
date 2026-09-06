@@ -13,6 +13,34 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device purged 49 of the 50 prekeys it had just published, so its pool never filled and it
+  minted fifty more on every connection.** Found by keeping the raw logcat of one NOTIF-1b run on a
+  Mi 9T and counting the lines: `needed=49` on every connection, and immediately after each top-up
+  `reconcilePublishedKeyPackages: purged 49/50 orphaned prekey(s)`. The arithmetic pins which 49 -
+  `needed=49` means the server held 1, the client published 49 to make 50, and 49 were purged, so
+  the packages it threw away were the ones it had just minted. In that single two-minute run the
+  phone minted **197 pool prekeys and 4 fallbacks**, ~389 kB of bundles, with **zero**
+  `NoMatchingKeyPackage`, zero storms and zero background sends. This was the ordinary path.
+
+  The cost compounds, because nothing prunes a bundle below 84 days: `mls.bin` went from
+  19 548 753 to **20 812 360 bytes in one day** and a single checkpoint from 17.1 s to **48.4 s**.
+  It also failed a row that had passed the same morning - NOTIF-1b reported `notifiedInMs = 20887`
+  against 2 152 ms on the same build, which is not a notification defect but a phone sitting inside
+  a forty-eight-second checkpoint.
+
+  `reconcilePublishedKeyPackages` now refuses to purge any prekey THIS process published, and says
+  so at `error`. **The guard is provenance, not a proportion**, and that distinction is the whole
+  design: a device restored from an older backup really has lost every private key it published, and
+  purging 50 of 50 is exactly what the function exists to do - so "too many orphans" cannot be the
+  test without breaking the legitimate case. What separates the loop from that case is that this
+  process minted these bytes and therefore holds their private key by construction, so a `false`
+  about one of them is never evidence about the server; it is evidence that the seam between minting
+  and asking is broken. `mls-core/tests/published_prekeys_are_recognised.rs` shows that seam is not
+  in Rust - 50 of 50 recognised through a publish round trip, the last-resort fallback included, and
+  another device's package correctly refused - which narrows the remaining cause to the IPC and
+  ordering above it, still open in `docs/wiki/backlog.md`. What is closed here is the silence: a
+  reconciliation undoing its own top-up looked exactly like one doing its job.
+
 - **The local MLS keystore never deleted a key package, so a phone's `mls.bin` reached 19.5 MB and
   a single checkpoint cost seventeen seconds.** Minting a key package writes its private bundle to
   storage, and the only reconciliation that existed ran the other way - `reconcilePublishedKeyPackages`

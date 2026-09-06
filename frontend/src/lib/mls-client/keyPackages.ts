@@ -28,3 +28,21 @@ export function mintKeyPackages(client: KeyPackageMinter, needed: number): Minte
     needed > 0 ? [...(client.generate_key_packages(needed) as Iterable<Uint8Array>)] : [];
   return { fallback, poolPackages };
 }
+
+/**
+ * A stable identity for a key package's BYTES, used to recognise one this process published.
+ *
+ * NOT a hash: the bytes are already a unique public artefact (they carry a fresh init key), there
+ * is no secret in them, and nothing here is a security decision - the question is only "are these
+ * the same bytes I sent". A length-prefixed latin-1 string is exact, allocation-cheap, and cannot
+ * collide the way a truncated digest could.
+ *
+ * The length prefix is what keeps it honest: without it, two different packages could in principle
+ * agree on a shared prefix and differ only in length, and a Set keyed on the body alone would call
+ * them the same. Cheap insurance on a comparison whose whole job is to be exact.
+ */
+export function fingerprintKeyPackage(bytes: Uint8Array): string {
+  let body = '';
+  for (let i = 0; i < bytes.length; i++) body += String.fromCharCode(bytes[i]);
+  return `${bytes.length}:${body}`;
+}
