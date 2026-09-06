@@ -1,4 +1,4 @@
-import { isChannelEventFrame } from '$lib/mls-client/channelEventTypes';
+import { isChannelEventFrame, isHeartbeatFrame } from '$lib/mls-client/channelEventTypes';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { fetch } from '@tauri-apps/plugin-http';
@@ -249,6 +249,9 @@ export class TauriMlsService extends BaseMlsService {
         try {
           const parsed = JSON.parse(msg.data as string) as Record<string, unknown>;
           const msgType = typeof parsed.type === 'string' ? parsed.type : '';
+          // The transport's keepalive, not a message. Parity with `WebMlsService`, through the one
+          // predicate both clients ask - see `isHeartbeatFrame`.
+          if (isHeartbeatFrame(msgType)) return;
 
           if (isChannelEventFrame(msgType)) {
             if (this.onChannelEvent) {

@@ -4576,6 +4576,53 @@ than three local patches.
 
 ## Storage and retention
 
+### P1 - `mls.bin` is 19.5 MB on a real phone, one checkpoint costs 17 SECONDS, and the PIN gate tells the user the unlock failed while it is still working (measured on the Mi 9T, 2026-09-06)
+
+Three lines from one launch of `0.16.4` on the Mi 9T, all from the same minute:
+
+```
+D mls_core::state: save_state: returning cached CBOR snapshot (19427791 bytes)
+I [MLS] Encrypted state checkpoint persisted. (17115 ms)
+I [MLS] Encrypted state checkpoint persisted. (19691 ms)
+```
+
+`stat mls.bin` on the device: **19 548 753 bytes**. Three checkpoints in that launch, 17.1 s, 17.1 s
+and 19.7 s. Nothing here is contended or unlucky - it is the cost of sealing 19.5 MB on this SoC,
+and it is paid again on every structural checkpoint.
+
+**WHAT IT COSTS THE USER, AND WHY IT IS A P1 RATHER THAN A PERFORMANCE NOTE.** `handlePinSubmit`
+arms a 10-second watchdog whose comment calls it a "temporal safety net" for "an unexpected early
+return or a hung network call". On this device the login legitimately takes ~19 s (`[pin] settled in
+18715ms`, measured twice), so the watchdog fires EVERY TIME, sets `pinError = m.auth_pin_timeout()`
+- *"Le deverrouillage prend plus de temps que prevu. Veuillez reessayer."* - and unblocks the
+spinner, while the login underneath goes on to succeed. The user is told, in red, that the unlock
+failed; retrying starts a second one. Seen on screen twice today (`scratchpad/shot.png`), and it is
+the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unlock this phone.
+
+**Two questions, and they have different answers.**
+
+1. **The watchdog is a clock standing in for a proof, which the durable rules forbid.** Ask what it
+   means if it is wrong: it means a working login is reported as failed. So either every path out of
+   `globalSession.login()` calls back exactly once - in which case the watchdog is dead weight and
+   the fix is to delete it and prove the callback - or some path returns without calling back, and
+   THAT is the defect the watchdog has been hiding since it was written. The enumeration is owed
+   before either line is touched.
+2. **19.5 MB is the real question and it is not answered.** It has not been established what
+   dominates the blob. One candidate has a mechanism already visible in the code:
+   `generate_key_packages` writes every bundle to the provider's storage and NOTHING deletes them
+   locally. `deleteAllOneTimePrekeys()` clears the SERVER's pool, and on every fresh start the client
+   then mints 50 more - so a device that has restarted often keeps every unconsumed bundle it has
+   ever generated. `TauriMlsService`'s own docblock already worries about "bloating the Rust state
+   with hundreds of unused private key bundles (each ~400 bytes)", which is the awareness without
+   the prune. That is a HYPOTHESIS: measure bytes-per-key-package against `save_state` in a
+   `mls-core` test, then measure what a fresh device's blob weighs per group, before touching
+   anything. **A prune must not be written before the population is measured** - and note that the
+   last-resort fallback (2026-09-06) is one bundle that must now be KEPT.
+
+**This is invisible to every gate in this repository.** The desktop clients carry a small state and
+the emulator never accumulates one; only a phone that has lived through a campaign shows it. It
+belongs with the other three iOS/Android defects that no green build could have caught.
+
 ### P2 - the MLS snapshot version is a PER-DOCUMENT counter compared ACROSS documents, so a second tab's write is dropped on a collision (measured on TAB-4, 2026-09-05)
 
 `saveMlsStateEncrypted` refuses any tagged write whose version is not strictly newer than the stored

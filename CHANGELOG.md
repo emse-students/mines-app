@@ -13,6 +13,17 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **Every mobile client accused the server of a defect once per heartbeat.** The gateway answers
+  each 8-second ping with `{"type":"pong"}`, which belongs to no handler and never did.
+  `WebMlsService` compared inline and returned; `TauriMlsService` had no such branch, so every one
+  of those frames fell through to `[WS RCV] frame type "pong" reached no handler - the server is
+  sending something this client does not route` - thirteen in ninety seconds on a Mi 9T, for ever,
+  on the one frame the server is required to send. A warning that fires on correct behaviour is the
+  line its reader learns to skip, standing directly in front of the real ones that branch exists to
+  surface. The predicate now lives beside `isChannelEventFrame`, in the file written after the last
+  time a routing rule spelled separately in the two clients silently disagreed, and both clients ask
+  it.
+
 - **A device re-entering several groups at once could join exactly ONE of them, and re-asked for
   the rest for ever.** The delivery service pops a one-time prekey when a device has one and
   otherwise serves that device's static `key_package` row - the same bytes, to every caller, until

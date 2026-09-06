@@ -16,7 +16,7 @@ import { APP_TAB, awaitMessage, client, COMPOSER, countMessage, ensureChat, eval
 import { gate, logcatReport, logcatSince, report, watch } from '../watch.mjs';
 import { mark, record, exitOnRecorded } from '../results.mjs';
 import * as phone from '../phone.mjs';
-import { PORTS, peerNameFor } from '../names.mjs';
+import { PORTS, SITE, peerNameFor } from '../names.mjs';
 
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -130,6 +130,27 @@ if (which === '1b') {
   await sleep(3_000);
   out.atBackground = { ...alive(), procState: phone.procState() };
 
+  // THE PREMISE THIS ROW RESTS ON, AND IT IS NOT AMBIENT ON EVERY PHONE. MIUI cuts a backgrounded
+  // app's network outright: measured on the Mi 9T on 2026-09-06, the same fetch from the same page
+  // answered 404 in 49 ms with the app in front and `error sending request for url` in 32 ms behind
+  // HOME. With the socket dead the JS layer cannot receive anything, so it cannot notify, and this
+  // row would report a product failure over an OS setting. `adb shell cmd appops set <pkg>
+  // RUN_ANY_IN_BACKGROUND allow` plus `dumpsys deviceidle whitelist +<pkg>` lifts it. Asserted here
+  // rather than assumed, and as its OWN clause: "the OS cut the network" and "the product stayed
+  // silent" are different findings and must not share a verdict.
+  out.reachableWhileHidden = await evaluate(
+    a1Setup,
+    `(async () => {
+       try {
+         const r = await fetch('${SITE}/api/health', { cache: 'no-store' });
+         return { reached: true, status: r.status };
+       } catch (e) { return { reached: false, error: String(e) }; }
+     })()`
+  ).catch((e) => ({ reached: false, error: String(e) }));
+  stage(
+    `backgrounded app reaches the estate: ${out.reachableWhileHidden?.reached ? 'yes' : 'NO - the OS is cutting it'}`
+  );
+
   const m = mark('NOTIF1B');
   out.marker = m;
   out.atSend = alive();
@@ -155,6 +176,7 @@ if (which === '1b') {
   const unmet = [];
   if (!out.atSend.pid) unmet.push('theAppWasStillAlive');
   if (out.atSend.foregrounded) unmet.push('theAppWasHidden');
+  if (!out.reachableWhileHidden?.reached) unmet.push('theOsLetTheHiddenAppKeepItsNetwork');
   if (out.notifiedInMs === null) unmet.push('aNotificationArrived');
   if (!carriesTheText) unmet.push('itCarriedTheMessageAndNotJustASenderName');
   if (out.notifiedInMs !== null && out.notifiedInMs >= 10_000) unmet.push('itBeatTheDeferredPushWindow');

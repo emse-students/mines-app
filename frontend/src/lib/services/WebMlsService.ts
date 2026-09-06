@@ -12,7 +12,7 @@ import {
 } from '$lib/mls-client';
 import { mintKeyPackages } from '$lib/mls-client/keyPackages';
 import type { MlsKeyPackageRequest } from '$lib/mls-client/mlsWorkerProtocol';
-import { isChannelEventFrame } from '$lib/mls-client/channelEventTypes';
+import { isChannelEventFrame, isHeartbeatFrame } from '$lib/mls-client/channelEventTypes';
 import { parseServerTimestampMs } from '$lib/mls-client/incomingDelivery';
 import { getToken } from '$lib/stores/auth';
 import {
@@ -440,9 +440,7 @@ export class WebMlsService extends BaseMlsService {
 
           const msg = JSON.parse(text);
           const frameType = typeof msg.type === 'string' ? msg.type : '';
-          if (frameType === 'pong' || frameType === 'ping') {
-            return;
-          }
+          if (isHeartbeatFrame(frameType)) return;
           // THE ONE FIELD EVERY FRAME HAS IS ITS TYPE, and this line used to print four that only a
           // PAYLOAD frame carries - so every control frame (a read receipt, a typing signal, a
           // channel event) announced itself as `senderId=undefined, isWelcome=undefined,
