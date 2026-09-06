@@ -4776,6 +4776,37 @@ arithmetic to argue about.** The client agrees from its own side: `needed=50` at
 not 49, not 30 - which is only possible if the pool is EMPTY each time. Reading 1 was right, and the
 debris is what made it look like something else.
 
+**READ OFF THE PHONE, 2026-09-06 - THE QUESTION IS CLOSED AND THE FIRST ANSWER WAS RIGHT.** An APK
+carrying `state_composition` was built and the device said it itself, in one line at load:
+
+```
+state composition - 8006000B total; KeyPackage 2338x5523276B, MessageSecrets 5x1220171B, Tree 5x1208632B
+```
+
+| part | entries | bytes | share | each |
+| --- | --- | --- | --- | --- |
+| **KeyPackage** | **2 338** | **5 523 276** | **69%** | 2 362 |
+| MessageSecrets | 5 | 1 220 171 | 15% | 244 034 |
+| Tree | 5 | 1 208 632 | 15% | 241 726 |
+
+**Key packages dominate, which is what this entry said before two corrections talked it out of the
+position.** 2 338 accumulated bundles on a device whose server pool holds fifty. Both earlier
+readings were also true and neither was the whole: deleting 42 abandoned groups really did free
+12.8 MB (~300 kB a group, and the table shows where that lives), and epochs really are bounded. What
+none of them could do was ATTRIBUTE, which is why the instrument now exists.
+
+**THE PRUNE'S 84-DAY HORIZON IS FAR TOO GENEROUS, AND THIS IS THE NUMBER THAT PROVES IT.** Not one of
+the 2 338 has expired - the prune did not fire on this load - because the pile accumulated in WEEKS
+and openmls dates a key package 84 days ahead. A horizon that never arrives is a horizon that bounds
+nothing in practice. **The retention rule needs to be tighter than a default lifetime, or bounded by
+COUNT**, and the count is now readable rather than guessed.
+
+**AND A REAL GROUP IS NOT THE GROUP THE SYNTHETIC TEST MEASURED.** ~490 kB apiece here, against
+5 330 bytes for a fresh group of one and a 17 kB plateau at 81 epochs. The weight is `Tree` (member
+leaves a campaign accumulated - 242 kB is roughly 120 of them) and `MessageSecrets` (per-sender
+ratchet history, which `SenderRatchetConfiguration::new(2000, 2000)` sizes deliberately). Neither is
+epochs. **Every synthetic figure in `state_weight.rs` is a FLOOR and must be read as one.**
+
 **WHAT THE FIELD SHOWED THE SAME NIGHT, AND IT CORRECTS THIS ENTRY'S ARITHMETIC A THIRD TIME.**
 After `cleanup.mjs` swept 42 abandoned groups, the phone's `mls.bin` fell from **20 812 360 to
 8 018 495 bytes** - 12.8 MB, 61% - and one checkpoint from 48 449 ms to **6 943 ms**. The prune

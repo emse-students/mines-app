@@ -615,6 +615,25 @@ unknown fields. Each candidate now recomputes its own `hash_ref` and must be nam
 stored under - exact by construction, since `openmls_memory_storage` builds every key as
 `label || json(id) || version`.
 
+**WHAT A REAL DEVICE'S STATE IS MADE OF, READ OFF THE PHONE RATHER THAN INFERRED** (Mi 9T,
+2026-09-06, one line at load from `MlsManager::state_composition`):
+
+| part | entries | bytes | share | each |
+| --- | --- | --- | --- | --- |
+| **KeyPackage** | **2 338** | **5 523 276** | **69%** | 2 362 |
+| MessageSecrets | 5 | 1 220 171 | 15% | 244 034 |
+| Tree | 5 | 1 208 632 | 15% | 241 726 |
+
+**Accumulated key package bundles are two thirds of it** - 2 338 of them on a device whose server
+pool holds fifty. **None had expired**, because the pile accumulates in weeks and openmls dates a
+key package 84 days ahead: the prune bounds the ceiling but its horizon never arrives at this mint
+rate, which is why a tighter or count-based retention is still owed ([backlog](../backlog.md)).
+
+**A REAL GROUP IS ~490 kB, AND NOT FOR THE REASON THAT LOOKED OBVIOUS.** The weight is `Tree` - the
+member leaves a long-lived group accumulates, ~242 kB being roughly 120 of them - and
+`MessageSecrets`, the per-sender ratchet history that `SenderRatchetConfiguration::new(2000, 2000)`
+sizes on purpose. It is NOT epochs:
+
 **WHAT IS BOUNDED AND WHAT IS NOT, MEASURED RATHER THAN DIVIDED.** `what_an_epoch_costs_at_constant_membership`
 churns one device in and out of a group forty times: at **81 epochs the state PLATEAUS at 17 364
 bytes**, growth stopping after the second round, with `MessageSecrets` and `ResumptionPsk` holding

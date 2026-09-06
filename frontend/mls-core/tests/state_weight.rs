@@ -13,6 +13,14 @@
 /// the SERVER's pool and the client then mints fifty more on the next fresh start. That is a story,
 /// not a measurement. This file turns it into one.
 ///
+/// EVERY FIGURE IN THIS FILE IS A FLOOR, AND 2026-09-06 IS WHY THAT WARNING IS NOW FIRST. A fresh
+/// group of one weighs 5 330 bytes here and epochs plateau at 17 kB; a real group on a phone that
+/// had lived through the campaign weighed ~490 kB, carried in `Tree` (member leaves) and
+/// `MessageSecrets` (per-sender ratchet history) - neither of which a synthetic group accumulates.
+/// Reasoning from these numbers to a real device's blob produced two wrong mechanisms in one
+/// evening. Use `MlsManager::state_composition`, which reads the device, for anything about a real
+/// state; use this only for what one ACTION costs.
+///
 /// IGNORED, BECAUSE IT IS A MEASUREMENT AND NOT AN ASSERTION. It prints a table and takes tens of
 /// seconds; a number is not a pass or a fail, and pinning today's bytes would only manufacture a
 /// failing test the first time a legitimate field is added.
