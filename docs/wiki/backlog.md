@@ -2061,6 +2061,52 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
+### P1 - the message that repairs a rejoining device takes FIVE MINUTES to be received, and it is plausibly encrypted at the epoch that device has just left (measured 2026-09-06, three times)
+
+HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device gets
+them - **314 seconds late**, which is 14 s after the row's 300 s budget gives up. The trail is exact
+and both sides are stamped:
+
+```
+01:45:28  [device] [HISTORY_STATE] Sent for 762fbcd3 - 00000000...
+01:45:28  [W1]     [HISTORY_STATE] Keys differ - asked <device> to describe
+   ...    (the device logs NOTHING about the queue between 01:45:39 and 01:50:42)
+01:50:42  [device] [HISTORY_STATE] W1 holds something different - describing our store
+01:50:42  [W1]     [HISTORY_BUNDLE] Diff sent for 762fbcd3: 3 of 3 requested message(s)
+```
+
+**REPRODUCED THREE TIMES**: the returned device (+314 s) and the reference minted minutes later
+(+308 s) in one run, and the returned device again (+300 s, budget exhausted) in a second run on a
+later build. Two devices, two builds, the same interval.
+
+**IT IS NOT A CLIENT-SIDE DEFERRAL.** The line is logged at the TOP of the `history_digest_request`
+branch, before `answerAfterMailboxDrained` is even called - so it stamps RECEIPT, not the answer.
+And the device was idle: no `[QUEUE]`, `[PENDING]` or `[ACK]` line at all in those five minutes.
+
+**IT IS NOT THE ACK BARRIER OR THE ESCALATION**, both of which were suspected and both of which are
+now excluded by measurement rather than by argument. The ack deadline of 2026-09-06 did not move it;
+the exclusion-reason fix of the same day did not move it. It is also not `waitForGroupQueueIdle`,
+which cannot delay a line printed before it is reached.
+
+**THE STANDING HYPOTHESIS IS MLS EPOCHS, AND IT COSTS ONE MEASUREMENT TO SETTLE.** The device rejoins
+by EXTERNAL COMMIT at 01:45:28, which advances the group's epoch. W1 answers the state key in that
+same second by sending `history_digest_request` INTO THE GROUP. If W1 has not yet applied the
+device's external commit, it encrypts at the old epoch - and the device, now past it, cannot read the
+one message that would repair it. The device logs `762fbcd3 holds 4 frame(s) it can never read` at
+01:45:41, four frames, immediately after joining. **If one of those is W1's digest request, the
+mechanism is confirmed.**
+
+  WHAT SEPARATES IT FROM THE ALTERNATIVE - a plain delivery latency - is the epoch stamped on the
+  unreadable frames against the epoch W1 sent at. Both are already logged; nothing new has to be
+  instrumented, only correlated. The alternative predicts the frame arrives once and late; the epoch
+  story predicts it arrives ON TIME and unreadable, and that what lands at +300 s is a LATER,
+  readable one.
+
+**A REPAIR MESSAGE THAT CANNOT BE READ BY THE DEVICE IT REPAIRS IS THE SAME CLASS AS THE FOUR FIXED
+ON 2026-09-05**, and it is why HEAL-REVOKE-4 cannot pass: the row's control fails with it
+(`theREFERENCEGotWhatWasSaid: false`), so the row correctly refuses to conclude about its subject
+rather than reporting a green equality between two devices that both got nothing.
+
 ### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
 
 `HEAL-NEW-11`, `-12` and `-15` were written for a product where a fresh device sat AMBER until some
