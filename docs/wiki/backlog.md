@@ -4801,6 +4801,31 @@ and openmls dates a key package 84 days ahead. A horizon that never arrives is a
 nothing in practice. **The retention rule needs to be tighter than a default lifetime, or bounded by
 COUNT**, and the count is now readable rather than guessed.
 
+**AND THE OBVIOUS TIGHTENING IS UNSAFE, WHICH IS THE PART A LATER SESSION WOULD GET WRONG.** The
+natural rule - *keep the recently minted bundles, drop the old ones* - grades on the wrong axis. A
+prekey can sit UNCLAIMED on the server for weeks and be claimed a second before the prune runs: its
+bundle is then old by mint date and load-bearing by use. **Mint age does not measure the risk.** What
+does is time since the package stopped being published, and nothing records that today.
+
+Three candidate rules, and what each actually costs:
+
+| Rule | Safe? | Reclaims the 2 338? |
+| --- | --- | --- |
+| `not_after < now` (shipped) | yes | no - 84 days never arrives |
+| Drop what the server's DELETE says it removed | **yes, by construction** - a returned row was never claimed, so no Welcome can exist for it | no, only the 50 currently published |
+| Keep published + last-resort + the K most recently minted | only if K mints cannot happen inside a Welcome's delivery window | yes, ~4.9 MB at K=200 |
+
+The second is provably correct and needs the endpoint to return what it deleted rather than 204. The
+third is the only one that reclaims the historical pile, and its safety is an ARGUMENT rather than a
+construction: with the provenance guard (#393) holding the pool at 50, K=200 is four full refills -
+days - and a Welcome does not take days. **That argument must be re-measured against the mint rate
+before the rule ships, not assumed from this line.** The guard is what makes it defensible at all; on
+a build without it the loop mints 200 in hours and the rule would eat live bundles.
+
+**The pile is very likely no longer growing.** It is debris from the purge loop, which #393 refuses.
+So this is a one-off reclaim of ~4.9 MB on affected handsets, not a leak - which is why it is P2 here
+and not filed with the P1 above.
+
 **AND A REAL GROUP IS NOT THE GROUP THE SYNTHETIC TEST MEASURED.** ~490 kB apiece here, against
 5 330 bytes for a fresh group of one and a 17 kB plateau at 81 epochs. The weight is `Tree` (member
 leaves a campaign accumulated - 242 kB is roughly 120 of them) and `MessageSecrets` (per-sender
