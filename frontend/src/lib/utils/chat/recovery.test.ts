@@ -717,6 +717,22 @@ describe('requestReAdd - the promotion after a successful external join', () => 
     expect(deps.saveConversation).toHaveBeenCalledWith('g1');
   });
 
+  it('caps the retry rate when the server row cannot be read, though it made no attempt', async () => {
+    // THE WATCHDOG CALLS THIS SEAM EVERY FIVE SECONDS. Deferring the join is right; deferring it
+    // without arming the cooldown turns an unreachable server into two HTTP round trips every five
+    // seconds, for as long as it stays unreachable. The throttle is the only thing between the two.
+    const deps = makeDeps({ mlsService: joined(), conversations: makeConversations() });
+    deps.mlsService.getGroupMeta = vi.fn().mockResolvedValue(null);
+    deps.mlsService.getGroupServerStatus = vi.fn().mockResolvedValue('error');
+
+    await requestReAdd('g1', deps);
+    await requestReAdd('g1', deps);
+
+    // One probe, not two: the second call is refused by the cooldown before it asks anything.
+    expect(deps.mlsService.getGroupMeta).toHaveBeenCalledTimes(1);
+    expect(deps.mlsService.externalJoin).not.toHaveBeenCalled();
+  });
+
   it('does not join at all when no row can be built, rather than joining anyway', async () => {
     // A DM whose peer the roster cannot name yet has no row that can be created, so this device
     // must not become reachable for it. The watchdog re-invokes on its cadence; joining first would

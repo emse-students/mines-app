@@ -234,6 +234,15 @@ export async function requestReAdd(groupId: string, deps: RecoveryDeps): Promise
     // reachable for could not be described either (see the block before `externalJoin`: `isGroup`
     // decides whether the row is a DM, and guessing it is guessing the row's name and its key).
     // Nothing is lost by waiting one cadence for an answer that is the input to both steps.
+    //
+    // THE COOLDOWN IS ARMED THOUGH NO ATTEMPT WAS MADE, and that half is not optional. The
+    // watchdog invokes this seam every FIVE seconds; the two probes above are what it costs to
+    // reach this line, so returning without arming anything turns an unreachable server into two
+    // HTTP round trips every five seconds for as long as it stays unreachable - the exact shape
+    // {@link findByGroupId} records costing every received DM the same. `markGroupNotReady` is
+    // deliberately NOT set with it: that marker means "this device owes a recovery", and what this
+    // branch knows is only that it could not ask.
+    lastReAddAt.set(groupId, now);
     deps.log(
       `[READD] ${groupId.slice(0, 8)}... server metadata unreadable - deferring the join one round`
     );
