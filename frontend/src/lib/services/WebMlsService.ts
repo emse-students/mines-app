@@ -1079,7 +1079,11 @@ export class WebMlsService extends BaseMlsService {
              * Refusing costs nothing: the decrypted plaintexts were already handed to the caller,
              * so only the catch-up's ratchet advance is thrown away, and the next replay redoes it.
              */
-            const swapped = await this.installUnlessOvertaken(
+            // The verdict is not read here because a REFUSAL reports itself: `installUnlessOvertaken`
+            // warns with the reason before returning false, so a caller storing the boolean would be
+            // a second place to keep the same fact - which is what the field deleted with this line
+            // was, written five times and read nowhere.
+            await this.installUnlessOvertaken(
               `catch-up (${groupId.slice(0, 8)}…)`,
               mutationsAtSnapshot,
               () => this.reloadClientFromPlainState(finalState)
