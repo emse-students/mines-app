@@ -27,6 +27,13 @@ import { writeFileSync } from 'node:fs';
 import { ACCOUNT_OF, PEER_NAME, PORTS, peerNameFor } from '../names.mjs';
 import { requireScript } from '../scriptpath.mjs';
 
+// THE PHONE THIS RUNNER DRIVES, DECLARED. Every row below is written for A1 - `PORTS.A1`,
+// `peerNameFor('A1')` - and with a second phone on the bench `serial()` refuses to choose rather
+// than driving the wrong one and reporting success. So the name the rows already assume is stated
+// here once, which also sets `ANDROID_SERIAL` for every adb and atom spawned underneath. See
+// `useDevice` in `phone.mjs`. A row that ever needs A2 changes this line, deliberately.
+phone.useDevice('A1');
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const HERE = new URL('.', import.meta.url).pathname.replace(/^\//, '');
 const mode = String(process.argv[2] || 'bg');
