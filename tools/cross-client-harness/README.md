@@ -654,6 +654,31 @@ next one's symptom names the wrong cause.
   test files afterwards. `bun run test` now compiles Paraglide itself, so there is nothing to
   remember - a rule that says "run X first" was a missing dependency, not a rule.
 
+### `deployed-wasm-check.mjs` - ask a DEPLOYED estate whether its wasm can panic
+
+```sh
+bun deployed-wasm-check.mjs https://dev.canari-emse.fr    # 0 clean, 1 refused, 2 could not look
+```
+
+Walks the JS chunk graph from the landing page, finds the `mls_wasm_bg.<hash>.wasm` the app would
+load, downloads it, and refuses if it carries `std`'s unsupported-platform panic text.
+
+**Why it exists.** On 2026-09-06 `v0.16.4` deployed green, both estates answered `HTTP 200`, and
+every browser login was refused with *"PIN incorrect"* - `std::time::SystemTime::now()` had reached a
+crate that compiles to wasm32, where it is not implemented and PANICS. Nothing between the merge and
+the outage could see it: it compiles, the deploy is green, the site answers. Run against production
+during the incident it named `mls_wasm_bg.YXThuGSF.wasm` - the exact file in the user's stack trace -
+with no credentials, in seconds.
+
+**It is not a login**, and must not be sold as one: it cannot see a defect that needs a session. It
+is the part that needs no account and would have caught THIS one. `EXIT 2` means the walk could not
+find the asset, which is **not** a pass - "I could not look" and "it is clean" are different answers
+and the script keeps them apart.
+
+**Its sibling guards the build**: `frontend/scripts/check-wasm-no-unsupported.mjs`, wired into
+`bun run wasm:build`. Both are needed - a build can be fixed while an estate still serves the old
+image, which is exactly the state production was in for the twenty minutes after the fix was merged.
+
 ## Rules that make a result trustworthy
 
 **Thirty-one** harness faults produced a false verdict before these were learnt. They are distilled,
