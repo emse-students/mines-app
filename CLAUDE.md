@@ -238,52 +238,49 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    now refuses rather than passes**: a fresh device reaches every group with NOTHING online, so the
    rows that watch a responder heal one have no window left and need a group the device cannot
    self-serve ([backlog](docs/wiki/backlog.md)).
-2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
+2. **P1 - A DEVICE PUBLISHES 50 PREKEYS AND PURGES ALL 50, SO ITS POOL IS EMPTY ESSENTIALLY
+   ALWAYS** - `count=50 / deleted=50` off the server on a swept estate, `needed=50` client-side.
+   The guard shipped (#393) refuses on PROVENANCE, never a proportion; **the CAUSE is still open**
+   and mls-core is exonerated by test. An empty pool means the static fallback is served to every
+   peer, so #390's `last_resort` marking is load-bearing for the NORMAL path
+   ([backlog](docs/wiki/backlog.md)).
+3. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
-3. **FIXED, NOT SHIPPED - SIX defects that each cost a rejoining device its history, and one of
-   them was the instrument's.** **The whole HEAL-REVOKE rung was re-run on 2026-09-06 and every row
-   reads `unmet: []`** - -4 and -3 `PASS` clean, -5/-8/-2/-9 `PASS-DIRTY` on ONE line each, the same
-   line, filed and deliberately not forgiven ([backlog](docs/wiki/backlog.md)). The `arrived twice`
-   line is gone from all of them, which is the field evidence for the ack barrier. The two fixes
-   that closed -4: an ORDERING (a device REACHABLE for a group five seconds before it could ROUTE
-   for it) and a log line that named no group, which made one clause unsatisfiable on every run that
-   row has ever had ([history-reconciliation](docs/wiki/protocols/history-reconciliation.md),
-   `CHANGELOG.md`).
-4. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
-   2026-09-05, seen on real people). Merged as #383 with the back-gesture hole `dismissible` was
-   missing, and asserted by PIN-11 plus two component test files. **It goes from this list the day a
-   release carries it** ([backlog](docs/wiki/backlog.md)).
-5. **THE DEPENDENCY CHAIN** (user: *"un projet qui peut 'vivre tout seul'"*) - **ONE merge mechanism
-   and ONE arming point since 2026-09-04**, the same four workflows in all four GitHub repos, and
-   `bun tools/ecosystem-shape/shape.mjs` is the only thing that asserts it
+4. **FIXED, NOT SHIPPED - SIX defects that each cost a rejoining device its history**, one of them
+   the instrument's. HEAL-REVOKE re-run 2026-09-06, every row `unmet: []`, four `PASS-DIRTY` on the
+   SAME single line - the outbox hole, filed and not forgiven
+   ([backlog](docs/wiki/backlog.md), `CHANGELOG.md`).
+5. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
+   2026-09-05, on real people). #383, asserted by PIN-11 + two component files. **Goes from this
+   list the day a release carries it** ([backlog](docs/wiki/backlog.md)).
+6. **THE DEPENDENCY CHAIN** (user: *"un projet qui peut 'vivre tout seul'"*) - ONE merge mechanism
+   and ONE arming point, asserted only by `bun tools/ecosystem-shape/shape.mjs`
    ([rebuild](docs/wiki/ecosystem-convergence.md#12-the-cicd-rebuild-2026-09-04---the-same-four-workflows-in-every-repository),
-   [cicd](docs/wiki/cicd.md#dependency-updates-and-the-auto-merge-that-ships-them), the only
-   copies). Open: **[the suppression CONTROL CASE the NestJS batch destroyed](docs/wiki/backlog.md#p2---the-nine-nestjs-pull-requests-were-closed-in-one-batch-so-the-suppression-question-was-never-measured-on-one-first-and-monday-2026-09-07-is-the-only-thing-that-can-answer-it-now-updated-2026-09-03)**
-   (Monday 2026-09-07 answers it), **nothing tells anybody prod is down**, and
-   [host-updates](docs/wiki/infrastructure/host-updates.md).
-6. **NO CAMPAIGN ROW ASKS A QUESTION WHOSE ANSWER IS A POPULATION** - four rows written into rung
+   [cicd](docs/wiki/cicd.md#dependency-updates-and-the-auto-merge-that-ships-them), the only copies).
+   Three open: the suppression CONTROL CASE the NestJS batch destroyed (Monday 2026-09-07 answers
+   it), **nothing tells anybody prod is down**, and
+   [host-updates](docs/wiki/infrastructure/host-updates.md) ([backlog](docs/wiki/backlog.md)).
+7. **NO CAMPAIGN ROW ASKS A QUESTION WHOSE ANSWER IS A POPULATION** - four rows written into rung
    12 MULTI, needing only `W1 W2` ([campaign](docs/wiki/cross-client-campaign.md)).
-7. **BLOCKED ON HARDWARE** ([table](docs/wiki/backlog.md#owed-a-verification-and-nothing-else),
+8. **BLOCKED ON HARDWARE** ([table](docs/wiki/backlog.md#owed-a-verification-and-nothing-else),
    [procedures](docs/wiki/device-verification.md)). **A precondition is NOT ambient.**
-8. **SIX UX/RENDERING ITEMS + TWO DEV-LOG LINES**, substance in [backlog](docs/wiki/backlog.md) only; four want ONE
-   pass over `app.css`.
-9. **CALLING IS HELD OFF - `CALLS_ENABLED = false`** (user, 2026-09-01); FIVE switches move in ONE
+9. **SIX UX/RENDERING ITEMS + TWO DEV-LOG LINES** ([backlog](docs/wiki/backlog.md)); four want ONE pass over `app.css`.
+10. **CALLING IS HELD OFF - `CALLS_ENABLED = false`** (user, 2026-09-01); FIVE switches move in ONE
    commit at revival ([calls](docs/wiki/frontend/modules/calls.md)). Prod HAS TURN, never used.
-10. **ONE NAMED STARTING POINT FOR EVERY PHASE, STEP AND STEP GROUP** (user, 2026-08-25). Contract
+11. **ONE NAMED STARTING POINT FOR EVERY PHASE, STEP AND STEP GROUP** (user, 2026-08-25). Contract
    and audit in [backlog](docs/wiki/backlog.md).
-11. **P1 - A DEVICE ASKS FOR A WELCOME FOR EVER AND THE MEMBER ANSWERING RESETS THE HEALING ROW** -
+12. **P1 - A DEVICE ASKS FOR A WELCOME FOR EVER AND THE MEMBER ANSWERING RESETS THE HEALING ROW** -
     five halves fixed 2026-09-04, **ONE PROD MEASUREMENT OWED**; read with its sibling P2
     ([backlog](docs/wiki/backlog.md)).
-12. **TWELVE MESSAGES DROPPED, PERMANENT COMMIT-LOG HOLE AT EPOCH 121** - the four defects shipped
+13. **TWELVE MESSAGES DROPPED, PERMANENT COMMIT-LOG HOLE AT EPOCH 121** - the four defects shipped
     in `v0.15.0`'s ancestors; the RESIDUE and the 13:10 arm are open ([backlog](docs/wiki/backlog.md)).
-13. **`dev.canari-emse.fr` IS THE PRE-RELEASE TARGET**
+14. **`dev.canari-emse.fr` IS THE PRE-RELEASE TARGET**
     ([dev-environment](docs/wiki/infrastructure/dev-environment.md), the only copy). Two open: a dev
     deploy cannot tell a broken CHANGE from an unreachable REGISTRY, and prod's deploy job is still
     inlined shell where `deploy-dev` exercises the script ([backlog](docs/wiki/backlog.md)).
-14. **THREE MORE FROM THE USER, 2026-09-05** - a P2 (a COMMUNITY message is not decrypted in a
-    background notification, and the KILLED case is unmeasured for both kinds), a QUESTION (does a
-    community invitation notify somebody with no prior conversation?), and one post-campaign direction
-    (ICM/ISMIN: two schools, sharing only admin and messaging). All three in
+15. **THREE MORE FROM THE USER, 2026-09-05** - a P2 (a COMMUNITY message is not decrypted in a
+    background notification), a QUESTION (does a community invitation notify somebody with no prior
+    conversation?), and one post-campaign direction (ICM/ISMIN). All in
     [backlog](docs/wiki/backlog.md); the first two need the phone.
 
 ### CANARI - THE ECOSYSTEM CHANTIER (migration CLOSED in all five repos 2026-08-27)
@@ -294,10 +291,8 @@ avec tous les composants stale corriges PARTOUT, bun a la place de npm PARTOUT e
 
 **Every decision, measurement, guardrail and per-repo state is on
 [ecosystem-convergence](docs/wiki/ecosystem-convergence.md), the ONLY copy - add to its tables rather
-than re-deriving anything here, which is what made this section wrong twice** (section 8 is the
-package manager, 9 is TS 7, 10 is bun 1.4 and the lockfile-v1 invariant, 11 is the repo-by-repo state
-and the second sweep's eleven gaps). Its "NOT TO BE RELITIGATED" paragraphs exist so a later session
-cannot "finish" the work by undoing a measurement.
+than re-deriving anything here, which is what made this section wrong twice.** Its "NOT TO BE
+RELITIGATED" paragraphs exist so a later session cannot "finish" the work by undoing a measurement.
 
 **What is left is JUDGEMENT, not migration** - MiGallery's lint warnings, the `resolve()` question
 three repos park differently, Tailwind class sorting on Portail-etu. **NestJS 12 is HALF DONE and
@@ -311,22 +306,15 @@ waiting on credentials Lydia owes; one MLS client in a SharedWorker; and the SEC
 
 ### CANARI - release, store submission, iOS
 
-**NEVER INFER A STORE, A VERSION OR A CI STATE FROM A LINE HERE - this paragraph has now been stale
-THREE times**, so it names no version at all. `gh release list` is the shipped version, Play is a
-MEASUREMENT (`bun tools/play-vitals/vitals.mjs`, [README](tools/play-vitals/README.md)), CI is
-`gh run list`, and the App Store half is read on
+**NEVER INFER A STORE, A VERSION OR A CI STATE FROM A LINE HERE - this paragraph has been stale
+THREE times**, so it names no version. `gh release list` is the shipped version, Play a MEASUREMENT
+(`bun tools/play-vitals/vitals.mjs`), CI is `gh run list`, and the App Store half is on
 [mobile](docs/wiki/frontend/mobile.md#where-the-submission-stands-and-what-each-half-is-waiting-on).
-Its one known cause is fixed rather than suspected - the script asked whether a version was NAMED
-`X.Y.Z` when Apple's rule is ONE non-terminal slot - and the key's role is SETTLED (a 409 means the
-JWT was accepted). **No HEAL-REVOKE verdict about a clean device may be taken on a build older than
-0.14.12.** **An APK is not reached by a deploy** - `frontendDist: "../build"` means the app EMBEDS
-the frontend, so `minClientVersion` and check S reason about a NAME unless a version identifies its
-content.
-
-**2.1(a) IS PASSED** and the two guidelines replacing it are answered in 0.14.15; per-half state on
-[mobile](docs/wiki/frontend/mobile.md#where-the-submission-stands-and-what-each-half-is-waiting-on).
-Only **check R** is left of the 2026-08-26 mails; **WP-RESTORE-1** (April 2027) is ACCEPTED, after
-the campaign.
+**No HEAL-REVOKE verdict about a clean device may be taken on a build older than 0.14.12.** **An
+APK is not reached by a deploy** - `frontendDist: "../build"` means the app EMBEDS the frontend, so
+`minClientVersion` and check S reason about a NAME unless a version identifies its content.
+**2.1(a) IS PASSED**; only **check R** is left of the 2026-08-26 mails, and **WP-RESTORE-1** (April
+2027) is ACCEPTED, after the campaign.
 
 **iOS: two things are PROVEN and must not be re-verified** - the session HOLDS on the iPhone, and a
 full parity audit read everything else as symmetric. Four items open in
@@ -340,20 +328,21 @@ Four files, four jobs, all listed in WHERE THINGS LIVE: board = state, campaign 
 methodology = how a result earns belief, README = operating manual. **Read them rather than
 re-deriving anything here, and keep no second copy.**
 
-**Five facts that are NOT on those pages, or that a session gets wrong by skipping them.**
-`bun rows.mjs` SETTLES whether the board matches the ledger - run it before believing a cell, it
-has caught the board wrong three times. **The rig targets the LOCAL estate since 2026-09-03**, so a
-push deploys nothing and the mutual-exclusion rule died with that move
-([methodology](docs/wiki/testing-methodology.md)); what replaces it is a rebuild or a `bun run dev`
-SAVE, which `bundle.mjs` measures. **The board is reset to zero**, archived at
-[archive](docs/wiki/cross-client-testing-archive.md). **A killed run can destroy a measurement
-seconds from being recorded, and losing a `chrome-w1`/`chrome-w2` profile costs a DEVICE.** **THE
-USER ASKED FOR THE LOGS TO BE READ ON EVERY PASS, the reconciliations especially** (2026-08-28) - a
-heal that works is not a heal that was observed, and reading them has since found one P1 no row asks
-about and turned a `FAIL` into another. Two instrument facts: the disposition for expected noise is
-`ignoringExpectedLog` **per row**, never a wider classifier - and a list the runner never NAMES is
-the same as no list, which cost a whole rung on 2026-09-06 - and the device cap is **re-measured
-around every run** rather than quoted.
+**Six facts that are NOT on those pages, or that a session gets wrong by skipping them.**
+`bun rows.mjs` SETTLES whether the board matches the ledger - run it before believing a cell, it has
+caught the board wrong FIVE times. **`bun cleanup.mjs` BEFORE believing a measurement**: 42 leftover
+groups made a run misread twice on 2026-09-06, and sweeping them turned a `FAIL` into the row's
+first clean `PASS` and PROVED a P1 - debris does not just slow a run, it reattributes what the run
+measures. **The rig targets the LOCAL estate since 2026-09-03**, so a push deploys nothing and the
+mutual-exclusion rule died with that move ([methodology](docs/wiki/testing-methodology.md)); what
+replaces it is a rebuild or a `bun run dev` SAVE, which `bundle.mjs` measures. **The board is reset
+to zero**, archived at [archive](docs/wiki/cross-client-testing-archive.md). **A killed run can
+destroy a measurement seconds from being recorded, and losing a `chrome-w1`/`chrome-w2` profile costs
+a DEVICE.** **THE USER ASKED FOR THE LOGS TO BE READ ON EVERY PASS** (2026-08-28) - a heal that works
+is not a heal that was observed, and reading them has since found two P1s no row asks about. Two
+instrument facts: the disposition for expected noise is `ignoringExpectedLog` **per row**, never a
+wider classifier - and a list the runner never NAMES is the same as no list - and the device cap is
+**re-measured around every run** rather than quoted.
 
 **Standing architectural directives from the user, verbatim:** *"le probleme doit etre
 architecturalement regle, pas mettre des pansements avec des timeouts ou autre, je veux que tout
