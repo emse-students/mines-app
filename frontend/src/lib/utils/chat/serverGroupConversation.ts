@@ -1,6 +1,6 @@
 import type { IMlsService } from '$lib/mls-client/IMlsService';
 import type { Conversation } from '$lib/types';
-import { resolveDirectPeerId } from './conversations';
+import { canRepresentThePeer, resolveDirectPeerId } from './conversations';
 import { holdsGroupState } from './groupUsability';
 
 /**
@@ -126,9 +126,14 @@ export async function ensureConversationForServerGroup(
 
   // Local dedup: if a direct conv with this same peer already exists under a different groupId
   // (server-side duplicate), do not create a second placeholder.
+  //
+  // A TOMBSTONE IS NOT A CANDIDATE - {@link canRepresentThePeer}, and this is the user's own report
+  // of 2026-08-23: a 1v1 pending local deletion blocked the arrival of the NEW conversation with
+  // that same peer. A record that exists only to be removed must not refuse its own replacement.
   if (directPeer) {
     const alreadyLoaded = [...conversations.values()].find(
       (c) =>
+        canRepresentThePeer(c) &&
         (c.conversationType ?? 'group') === 'direct' &&
         (c.directPeerId ?? c.contactName).toLowerCase() === directPeer
     );

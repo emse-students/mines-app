@@ -254,6 +254,17 @@ Deep links, system events, rosters and the channel/DM asymmetry are on those two
 
 ## Outbound delivery -> [chat](frontend/modules/chat.md), [history-reconciliation](protocols/history-reconciliation.md), [chat-delivery](services/chat-delivery.md), [mobile](frontend/mobile.md)
 
+- **A RECORD THAT EXISTS ONLY TO BE REMOVED MUST NOT BE ABLE TO REFUSE ITS OWN REPLACEMENT.** A
+  `removed` conversation is a tombstone - deleted by a peer, an exclusion, or a local deletion the
+  server has not answered - and it stays in the store until a MANUAL deletion, so it is present and
+  matched like any other. Two independent de-duplication sites keyed on the peer alone: one declined
+  to create the replacement (the user's 2026-08-23 report), and the login-time merge, which keeps
+  the most RECENT record and deletes the others locally AND on the server, absorbed a conversation
+  the user had just started and deleted its group for the other party too. **When two sites ask the
+  same question, the question is a predicate with a name, not a condition each writes for itself** -
+  they had diverged on nothing and were wrong together. And the anti-vacuity half matters as much as
+  the fix: a guard that switched de-duplication off would satisfy every tombstone case while
+  resurrecting the duplicate-DM defect the merge exists for. [chat](frontend/modules/chat.md)
 - **BEING REACHABLE AND BEING ABLE TO ROUTE ARE TWO FACTS, AND ONE STRICTLY PRECEDES THE OTHER.**
   `externalJoin` publishes this device's leaf: from the instant it returns, every member may address
   the group and the delivery service routes to it. What makes an arriving frame usable is a

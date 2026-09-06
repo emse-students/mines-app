@@ -13,6 +13,25 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A one-to-one conversation waiting to be deleted blocked the NEW conversation with that same
+  person, and on one of the two paths it deleted it outright - for both parties.** Reported by the
+  user on 2026-08-23: the peer had deleted the 1v1, it sat locally pending deletion, and the
+  replacement never arrived. Two places ask "is there already a conversation with this peer" and
+  neither looked at the record's lifecycle, although `removed` explicitly means *deleted by a peer,
+  an exclusion, or a local deletion the server has not answered* - a tombstone that stays in the
+  store until the user removes it by hand. Discovery matched it and declined to create the
+  replacement, which is the reported symptom. The login-time duplicate merge matched it too, and
+  that one destroys: it keeps the most RECENT record of a peer as canonical and deletes the others
+  locally **and on the server**, so a tombstone with a newer timestamp absorbs a conversation the
+  user has just started and deletes its group for the other person as well. The mirror ordering is
+  not harmless either - a record kept deliberately would vanish on a login, its messages surfacing
+  inside a conversation the user believes is new. **A record that exists only to be removed must not
+  be able to refuse its own replacement**, and that is now one predicate both sites call: a
+  tombstone takes no part in de-duplication, as neither target nor source, and keeps its own row and
+  its own messages until a manual deletion. Five tests, including both orderings of the merge and an
+  anti-vacuity case on each site - "stop de-duplicating" would satisfy every tombstone case while
+  resurrecting the duplicate-DM defect the merge exists for.
+
 - **A device that repaired itself by rejoining a group became reachable for it five seconds before
   it could route anything, and the answer carrying its missing history landed in the gap.**
   `externalJoin` publishes this device's leaf: the instant it returns, every member may address the

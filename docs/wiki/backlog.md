@@ -3442,6 +3442,12 @@ Three separate things, in the order they have to be answered:
    untouched by both fixes. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build carrying
    `da0ce2f2`, not the inference that the cause found must have been the cause reported.
 
+   **AND THE ROWS THAT WERE OWED HAVE RUN.** HEAL-REVOKE-2 and -3 are `PASS-DIRTY` on `2862d958`
+   with `unmet: []` and `equalityGap: []`; their only dirt is the `arrived twice` line, a separate
+   defect fixed on 2026-09-05. **This entry no longer waits on "those rows have no runner yet"** -
+   the runner is `archive/healrevoke.mjs --row 2 / --row 3`, and what is owed is a re-run on a build
+   carrying the ack barrier, not a runner.
+
    **HEAL-REVOKE-1 RAN ON 2026-09-05 AND THE SYMPTOM DOES NOT REPRODUCE - `PASS`, clean, `unmet: []`
    on `2862d958`.** A device that held 7 of 7 rows plus a group minted for the row was revoked
    through the product's own panel; the server recorded the decision in 276 ms and the device left
@@ -3511,12 +3517,24 @@ Three separate things, in the order they have to be answered:
    complete, so the user does not know to retry - it needs to know its own expected count and report
    the shortfall, per the standing rule that a correct mechanism with no report is found by hand a
    day late.
-3. **A local tombstone was treated as a live conversation for de-duplication.** The peer had deleted
-   the 1v1; locally it sat pending deletion; the NEW conversation with that same peer was then
-   dropped, apparently as a duplicate of the record that was on its way out. Whatever key the dedup
-   uses must exclude anything pending deletion, or the pending state has to be resolved before the
-   new conversation is accepted - a record that exists only to be removed must not be able to refuse
-   its own replacement.
+3. **FIXED 2026-09-06, NOT SHIPPED - a local tombstone was treated as a live conversation for
+   de-duplication.** The peer had deleted the 1v1; locally it sat pending deletion; the NEW
+   conversation with that same peer was then dropped as a duplicate of the record that was on its
+   way out.
+
+   **TWO SITES ASKED THE SAME QUESTION AND NEITHER LOOKED AT THE LIFECYCLE**, and the second is far
+   worse than the reported symptom. `discoverMissingGroups` matched on the peer alone and declined
+   to create the replacement - that is the user's report. `mergeDirectConversationDuplicates` groups
+   a peer's records the same way, picks the most RECENT as canonical, and deletes every other one
+   **locally AND on the server** (`deleteGroupOnServer`) - so a tombstone with a newer `updatedAt`
+   takes the fresh conversation's messages and destroys the fresh group **for both parties**. The
+   mirror ordering is not harmless either: a record kept deliberately until the user removes it
+   would vanish on a login, its messages surfacing inside a conversation the user thinks is new.
+
+   **ONE PREDICATE, BOTH SITES**: `canRepresentThePeer` in `conversations.ts` - a `removed` record is
+   a tombstone and takes no part in de-duplication, as neither target nor source. Five tests, both
+   orderings of the merge plus an anti-vacuity case on each site, because "stop de-duplicating"
+   would pass every tombstone case and resurrect the duplicate-DM defect the function exists for.
 
 **This is HEAL's, by the user's own framing** (*"On y reviendra au moment ou on fera la campagne
 HEAL"*). Rung 16 is where it gets armed, and item 1 now carries FOUR rows rather than needing a

@@ -240,13 +240,13 @@ rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
    self-serve ([backlog](docs/wiki/backlog.md)).
 2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
-3. **FIXED, NOT SHIPPED - FIVE defects that each cost a rejoining device its history.** Four found
-   by HEAL-REVOKE-7/-5, which now reads **`PASS` on both halves, clean**, where it read `0 of 3 for
-   ever` eight times. The fifth is HEAL-REVOKE-4's, and it is an ORDERING: a device was REACHABLE
-   for a group five seconds before it could ROUTE for it, so the answer repairing its history was
-   refused before any decrypt. **HEAL-REVOKE-4, -5 and HEAL-repair are owed a re-run on that build**
-   - and -4's is also the first time that frame reaches a decrypt, which is the only thing that can
-   settle the epoch question behind it
+3. **FIXED, NOT SHIPPED - SIX defects that each cost a rejoining device its history, and one of
+   them was the instrument's.** HEAL-REVOKE-7 and HEAL-repair read `PASS`; **HEAL-REVOKE-4 now reads
+   `PASS`, clean on all three observers, `unmet: []`** - 3 of 3 in 0 ms where it read `0 of 3 for
+   ever`. The two that closed it: an ORDERING (a device REACHABLE for a group five seconds before it
+   could ROUTE for it) and a log line that named no group, which made one clause unsatisfiable on
+   every run that row has ever had. **HEAL-REVOKE-5, -8, -2, -3 and -9 are owed a re-run** - all
+   `PASS-DIRTY` on the `arrived twice` line alone, which is fixed
    ([history-reconciliation](docs/wiki/protocols/history-reconciliation.md), `CHANGELOG.md`).
 4. **FIXED, NOT SHIPPED - the PIN gate could be dismissed and offered no way out** (user,
    2026-09-05, seen on real people). Merged as #383 with the back-gesture hole `dismissible` was
