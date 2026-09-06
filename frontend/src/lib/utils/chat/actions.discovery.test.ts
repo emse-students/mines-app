@@ -32,6 +32,10 @@ function makeMls(overrides: Partial<IMlsService> = {}): IMlsService {
     getGroupServerStatus: vi.fn().mockResolvedValue('absent'),
     getGroupUserMembers: vi.fn().mockResolvedValue([]),
     isDistributionGroup: vi.fn().mockReturnValue(false),
+    // Creating a placeholder ANNOUNCES it: a frame already buffered `absent-conversation` for this
+    // group becomes routable at exactly this instant. Stubbed here rather than per test because
+    // every path through `ensureConversationForServerGroup` that creates a row calls it.
+    notifyConversationAvailable: vi.fn(),
     registerDistributionGroup: vi.fn(),
     forgetDistributionGroupById: vi.fn((groupId: string) => {
       const local = (built.getLocalGroups as () => string[])();
@@ -537,5 +541,94 @@ describe('discoverMissingGroups - a group with an exit still owed', () => {
 
     expect(conversations.has(OWED)).toBe(true);
     expect(conversations.has(FRESH)).toBe(true);
+  });
+});
+
+/**
+ * THE USER'S REPORT OF 2026-08-23, AS A ROW OF ITS OWN.
+ *
+ * *"une conversation 1v1 avec quelqu'un [qui] avait ete en attente de suppression locale sur cet
+ * appareil ... a fait barrage a la reception de la nouvelle conversation avec ce pair"*. The dedup
+ * matched on the peer alone, and a `removed` record - deleted by the peer, an exclusion, or a local
+ * deletion the server has not answered - stays in the store until a MANUAL deletion. So it was
+ * matched like any live conversation, and the replacement was declined as its duplicate.
+ */
+describe('discoverMissingGroups - a 1v1 pending deletion must not block its replacement', () => {
+  const PEER = 'peer-42';
+  const OLD = 'a1000000-0000-4000-8000-00000000000a';
+  const NEW = 'b1000000-0000-4000-8000-00000000000b';
+
+  /**
+   * BOTH GROUPS STAY ON THE SERVER LIST, and that is not decoration. Dropping the old one makes
+   * discovery reconcile it as absent before the placeholder loop ever runs, so the live case would
+   * pass for the wrong reason - the record it is supposed to be blocked by is gone by then.
+   */
+  const mlsWithPeer = () =>
+    makeMls({
+      getUserGroups: vi.fn().mockResolvedValue([
+        { groupId: OLD, name: `user-a::${PEER}`, isGroup: false },
+        { groupId: NEW, name: `user-a::${PEER}`, isGroup: false },
+      ]),
+      getGroupUserMembers: vi.fn().mockResolvedValue([{ userId: 'user-a' }, { userId: PEER }]),
+    });
+
+  it('creates the new conversation when the only match is a tombstone', async () => {
+    const conversations = new Map<string, Conversation>([
+      [
+        OLD,
+        {
+          id: OLD,
+          name: PEER,
+          contactName: PEER,
+          messages: [],
+          lifecycle: 'removed',
+          mlsStateHex: null,
+          conversationType: 'direct',
+          directPeerId: PEER,
+        } as Conversation,
+      ],
+    ]);
+
+    await discoverMissingGroups({
+      mlsService: mlsWithPeer(),
+      userId: 'user-a',
+      deviceKeyB64: '1234',
+      conversations,
+      log: vi.fn(),
+    });
+
+    // BOTH are present: the tombstone stays until a manual deletion, and the replacement exists.
+    expect(conversations.has(NEW)).toBe(true);
+    expect(conversations.has(OLD)).toBe(true);
+  });
+
+  it('still declines when the match is a LIVE conversation with that peer', async () => {
+    // The anti-vacuity half: the guard is the lifecycle, not the peer. Without this the fix above
+    // could be "stop de-duplicating", which resurrects the duplicate-DM defect it was written for.
+    const conversations = new Map<string, Conversation>([
+      [
+        OLD,
+        {
+          id: OLD,
+          name: PEER,
+          contactName: PEER,
+          messages: [],
+          lifecycle: 'active',
+          mlsStateHex: null,
+          conversationType: 'direct',
+          directPeerId: PEER,
+        } as Conversation,
+      ],
+    ]);
+
+    await discoverMissingGroups({
+      mlsService: mlsWithPeer(),
+      userId: 'user-a',
+      deviceKeyB64: '1234',
+      conversations,
+      log: vi.fn(),
+    });
+
+    expect(conversations.has(NEW)).toBe(false);
   });
 });

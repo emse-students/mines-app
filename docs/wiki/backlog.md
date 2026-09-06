@@ -1223,7 +1223,7 @@ audio and video, with TURN as production configures it - prod HAS it configured
 the manifest permission, `kCanariCallsEnabled` and Kotlin's `CALLS_ENABLED` all move together, and
 `CallService.callsEnabled.test.ts` is the test that already asserts the on state.
 
-### P3 - the SFU's TURN acquisition fails in silence, twice (2026-09-01)
+### ~~P3 - the SFU's TURN acquisition fails in silence, twice (2026-09-01)~~ - FIXED 2026-09-06, and it was THREE times
 
 `fetch_cloudflare_ice_servers` ends both its network call and its JSON decode with `.ok()?`
 (`apps/call-service/src/main.rs`), so a Cloudflare outage, an expired API token and a response shape
@@ -1238,6 +1238,21 @@ and it took reading the call site to know that meant "no call" rather than "acqu
 That ambiguity is the defect. Note also that `docs/wiki/services/call-service.md` claimed the fetch
 happens **on startup**; it happens per peer connection (`resolve_ice_servers()` at the API builder),
 and the page has been corrected.
+
+**FIXED 2026-09-06, and the third silence was in the same function.** Both `.ok()?` now log and say
+what they fell back to - `Cloudflare TURN API unreachable` for the transport failure, and a distinct
+line for a 2xx whose body this service cannot read, which is the response-shape change that would
+otherwise be indistinguishable from an outage. The third: `CLOUDFLARE_TURN_TTL_SECONDS` was read as
+`.ok().and_then(|s| s.parse().ok()).unwrap_or(3600)`, so `7200s` - a plausible thing for a human to
+write - silently became 3600, and the only way to find out was to time a credential expiring. It
+warns and names the offending value now.
+
+**The two env-var reads above them stay silent DELIBERATELY**: an absent `CLOUDFLARE_CALLS_API_TOKEN`
+is a configuration statement, not a failure, and a line on every start of a dev estate is the noise
+this entry exists to remove. The difference is now visible - if TURN is configured and broken, three
+lines say so.
+
+`cargo clippy --all-features --all-targets` clean.
 
 ### P2 - what made the profile fetches fail on that device at that moment
 
@@ -2061,11 +2076,12 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
-### P1 - the request travels on a channel epochs cannot break and the ANSWER does not, so a device that repairs itself by joining can never read the reply (measured 2026-09-06 on the gateway and the delivery service)
+### P1 - FIXED, NOT SHIPPED - a rejoining device was REACHABLE for a group five seconds before it could ROUTE for it, and the answer repairing its history landed in the gap (measured 2026-09-06, fixed the same day)
 
 HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device never
-gets them. **It is not a delay, not a timer, and not a delivery failure** - the first two readings of
-this said "314 seconds" and "never routed", and both were wrong. What is true is worse and simpler.
+gets them. **It is not a delay, not a timer, and not a delivery failure** - the first three readings
+of this said "314 seconds", "never routed" and "unreadable at the old epoch", and all three were
+wrong. What is true is simpler, and it is an ORDERING.
 
 WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end:
 
@@ -2078,46 +2094,164 @@ WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end
 ```
 
 **It was delivered, live, in the same second, to a device the server knew was online.** The gateway
-agrees: exactly one `kind=mls` frame to that device for that group. Six seconds later the device
-logs `27a8f5bf holds 4 frame(s) it can never read`. **The answer arrived and could not be decrypted.**
-
-**THE TWO LEGS OF ONE EXCHANGE TRAVEL ON DIFFERENT CHANNELS, AND ONLY ONE OF THEM SURVIVES AN EPOCH
-CHANGE.** The same second, from the same log:
+agrees: exactly one `kind=mls` frame to that device for that group. And the DEVICE'S OWN console says
+what happened to it:
 
 ```
-[COMMIT] base published with the commit group=GRP epoch=2      <- the joiner CREATED epoch 2
-[MEMBERSHIP_ACTIVE] device=<the returned device>
-[HISTORY_REQ] FORWARDED target=<W1> requester=<the returned device>   <- kind=CONTROL, device-addressed
-[SEND] sender=<W1> ...                                                <- kind=MLS, group, epoch-bound
+02:00:37  [READD] 27a8f5bf... rejoined via external commit (self-service)
+02:00:37  [MLS] Message for absent conversation 27a8f5bf... - retry after restore
+02:00:42  [DISCOVERY] Placeholder "..." created
 ```
 
-The device rejoins by EXTERNAL COMMIT, which advances the group to epoch 2. Its solicitation reaches
-W1 as a `control` frame - addressed to a device, carried outside the group, immune to all of this.
-W1's answer goes back as an ordinary MLS group message. If W1 has not yet applied the commit that
-created epoch 2 - and it has had milliseconds - it encrypts at epoch 1, and **a device that joined AT
-epoch 2 holds no epoch-1 secrets and never will**. The reply is unreadable by construction, not by
-accident, and the window is the width of one commit's propagation.
+**The device was a member of the group for five seconds before it held a conversation to put anything
+in.** `externalJoin` PUBLISHES the leaf: from the instant it returns, every member may address the
+group and the delivery service routes to it. The conversation row - the thing that makes an arriving
+frame routable - came from `discoverMissingGroups`, a DIFFERENT sweep over the SAME server list,
+running fire-and-forget on its own cadence. Two halves of one act, no order between them, and the
+order actually taken decided by whichever finished first.
 
-**NOTHING RETRIES, so the exchange simply dies.** The device sits holding four frames it cannot read
-and an answer it will never decrypt. In the campaign it looks like a 300 s delay only because the
-harness reloads the page when its budget expires, and the reconnect starts a fresh exchange at the
-current epoch - which then works instantly. **In a real session the reconnect may be minutes, hours,
-or never.**
+**AND NOTHING DISCHARGED THE WAIT.** `handleKnownGroup` answers `false` for a group with no
+conversation row, notes `absent-conversation` and leaves the frame in the server queue - which is
+correct, and is the only honest thing to do with a frame nothing can hold. But the sole trigger that
+collected that reason was the boot restore, a ONE-SHOT that had already fired, and which cannot
+produce a conversation the local store has never held. So the frame sat in the queue until the next
+reconnect. In the campaign that looks like a 300 s delay only because the harness reloads the page
+when its budget expires; **in a real session the reconnect may be minutes, hours, or never.**
 
-**THE FIX IS THE ASYMMETRY, and the request leg already shows what right looks like.** An answer to a
-device-addressed solicitation should not be sent as group ciphertext at whatever epoch the responder
-happens to hold: either it travels `control` as the request does, or the responder applies pending
-commits for that group before answering. **Anything that keeps the answer epoch-bound keeps the
-defect**, because the responder cannot know it is behind at the moment it replies.
+**THE FIX IS THE ORDER, AND THE WELCOME PATH ALREADY SHOWED WHAT RIGHT LOOKS LIKE.**
+`setupMessageHandler` writes the conversation row INSIDE the MLS lock that installs the group, so
+joining and being able to route are one step; the external-commit join had no such step. It has one
+now: `requestReAdd` builds the row - through the seam extracted from discovery, so there is ONE
+construction and not two conventions - and only then publishes the leaf. Three outcomes refuse the
+join rather than proceeding without a row: an owed exit (which also TERMINATES the recovery, on that
+durable row as a proof - rejoining a group the user deleted is DEL-10 with the halves swapped), an
+unresolved DM peer, and a duplicate. The transient-`getGroupMeta` branch, which said "skip this
+round" in its comment and then fell through to the join anyway, now really does skip.
+See [serverGroupConversation.ts](../../frontend/src/lib/utils/chat/serverGroupConversation.ts).
+
+**WHY IT TOOK FOUR READINGS, AND WHAT THE FOURTH CORRECTS.** The ack barrier and the exclusion-reason
+bug were both suspected, both fixed, and neither moved the number - and it was that second failure to
+move it that forced the reading off the client and onto the gateway, where the "300 s" turned out to
+be the instrument's own budget. **A number reproduced four times looked like a product constant and
+was a harness's.** The third reading then said W1's reply was encrypted at an epoch the joiner holds
+no secrets for, and **that reading asserts a decrypt that never happened**: the conversation guard in
+`handleKnownGroup` sits BEFORE any decrypt, so the frame was refused without being tried.
+
+  **SO THE EPOCH QUESTION IS OPEN, NOT ANSWERED - and it is the first thing the re-run measures.**
+  The two legs of this exchange really do travel differently: the solicitation reaches W1 as a
+  `control` frame, device-addressed and outside the group; the answer comes back as an ordinary MLS
+  group message, epoch-bound. A responder milliseconds behind the joiner's own external commit would
+  encrypt at the previous epoch. **Nothing here proves that happens and nothing here rules it out**,
+  because until the ordering fix the frame never reached a decrypt to find out. The re-run of
+  HEAL-REVOKE-4 on the fixed build is the first time it will, and `holds N frame(s) it can never
+  read` is NOT evidence either way - that summary counts `past-epoch-application`, the pre-join
+  backlog every fresh joiner meets by construction.
 
   READ WITH THE FOUR FIXED ON 2026-09-05, which are the same family: an answer that arrives before
   the asker can receive it. Those four were about the WAITER not being there; this one is about the
-  answer being unreadable when it lands, which no amount of waiting fixes.
+  device being ADDRESSABLE before it was ready to be addressed.
 
-**WHY IT TOOK THREE READINGS.** The ack barrier and the exclusion-reason bug were both suspected,
-both fixed, and neither moved the number - and it was that second failure to move it that forced the
-reading off the client and onto the gateway, where the "300 s" turned out to be the instrument's own
-budget. **A number reproduced four times looked like a product constant and was a harness's.**
+**MEASURED, AND THE ROW IS `PASS`.** On `cafb24177`, 2026-09-06 09:52: **the returned device sees
+3 of 3 in 0 ms** and the reference 3 of 3 in 1 ms, `equalityGap: []`, 40 rows / 40 ready,
+`stillAmber: []`, **clean on all three observers**, `unmet: []`. All three trigger clauses hold, so
+the row is not vacuous.
+
+**IT TOOK TWO FIXES AND THE SECOND WAS THE INSTRUMENT'S OWN BLINDNESS.** The ordering above put the
+subject green on the very first re-run (09:42) - 3 of 3 in 0 ms where the previous run read `0 of 3
+for ever` - and the verdict was still `FAIL`, on one clause: `theAskerAPPLIEDTheAnswer`. That clause
+was **unsatisfiable by construction, on every run this row has ever had**. The runner filters each
+client's join/history trail by the group's own id prefix, deliberately (*a trail of forty lines
+about fifteen groups answers nothing about the one that failed*), and
+`[HISTORY_BUNDLE] N messages received from the inviting peer` named no group at all. **That is a
+product log defect and not a rig one**: on a device rejoining forty groups it is the ONE line saying
+a conversation's history was repaired, its sibling four statements above already named both the
+group and the sender, and `from the inviting peer` was wrong too - the sender is whichever member
+the server's RANDOM election picked. Fixed at the line.
+
+**AND THE EPOCH QUESTION IS ANSWERED FOR THIS ROW: NOT OBSERVED.** The frame now reaches a decrypt,
+and the exchange completes in 0 ms - so the asymmetry between a `control` request and an epoch-bound
+answer, real as it is on paper, did not cost this row anything on any of the three runs. It stays
+worth knowing and is no longer evidence for anything.
+
+**OWED**: HEAL-REVOKE-5, -8, -2, -3 and -9 on a build carrying both fixes - all `PASS-DIRTY` on the
+`arrived twice` line alone, which is fixed. Until a release carries them this is FIXED, NOT SHIPPED.
+
+### P3 - the LAST unserialised writer of the MLS snapshot is the key-package path, and it is the one that makes the guard log (read 2026-09-06, NOT reproduced)
+
+**FILED FIRST AS A P2 ABOUT A STALE CAPTURE CARRYING A FRESH VERSION, AND THAT READING WAS TOO
+STRONG - the guard I had not seen is `installUnlessOvertaken`.** The key-package WORKER takes a
+SNAPSHOT of the client state, generates off-thread, and its result is installed only if the live
+client has not moved under it (`mutationsAtSnapshot`, plus `swapClientMonotonic`'s per-group epoch
+check); a refused swap falls into the branch that regenerates on the LIVE client. So the worst case
+I described - an old capture persisted as if fresh - is not reachable through the path I claimed it
+was. **Recorded rather than quietly deleted: the entry was written from the tag site alone, without
+following what happens to the bytes, which is the mistake and not the conclusion.**
+
+**WHAT IS REAL AND IS THE POINT: this is the one writer that does not go through the persister.**
+Every other path does. `persistMlsStructuralCheckpoint` routes to the registered
+`MlsStatePersister`, which serialises its own flushes (`inFlightEncrypted` plus a re-run flag), so
+the persister cannot race itself and `persistMlsStateAfterMutation` inherits that. The key-package
+publication seam instead does `save_state` followed by `saveMlsState(userId, tagMlsSnapshot(...))` -
+**the exact two-call shape whose removal is already documented next door**, in `runSaveEncrypted`:
+*"ONE CALL, BECAUSE THE PLATFORM OWNS WHAT DURABLE MEANS ... this used to be `saveState` followed by
+`saveMlsStateEncrypted`, which is right on web and writes `mls.bin` TWICE on native"*. That call site
+kept its own copy of an answer that was corrected everywhere else.
+
+**AND IT EXPLAINS THE MEASUREMENT EXACTLY.** Key-package publication happens ONCE per connection,
+which is why the drop is once per mint and off by exactly one rather than a storm: two writers, one
+of them serialised, meeting once. The entry below is the noise; this is its second call site.
+
+**THE FIX IS TO DELETE THE OVERLAP, NOT TO ORDER IT**: route this write through
+`persistMlsStructuralCheckpoint()` like everything else, which also gives it the durability the
+publication actually needs (the private halves of the key packages must be on disk BEFORE they are
+published). It is not done here because it touches the client's persistence path and the only thing
+that can say it is safe is a run of the HEAL rung, which is what this session spent its measurements
+on. **Nothing observed a loss, and the guard's every line is about the safe direction.**
+
+### P3 - three writers persist one MLS document and the guard between them logs on every mass join (measured 2026-09-06)
+
+**The line is `[MLS] Skipping stale MLS state write (v110 < stored v111)`, and it is the guard
+WORKING.** Snapshots are tagged with a monotonic version at the SYNCHRONOUS capture moment, on
+purpose - *"the version travels with the bytes via a WeakMap, so the async Argon2 step cannot
+reorder it"* - and the MLS client is epoch-monotonic, so a snapshot captured later never reflects a
+staler state than one captured earlier. An earlier capture whose write lands after a later one's is
+therefore correctly dropped, and the fresher state is what stays. **Nothing is lost**, and a failed
+write of the newer one costs one missed checkpoint rather than a regression.
+
+**WHAT IT IS THE VISIBLE END OF IS THREE WRITERS ON ONE DOCUMENT.** `persistNow` (the state
+persister), `persistMlsStateAfterMutation`, and the key-package publication path all capture and
+write; a device performing a mass join runs all three within seconds of each other, and two captures
+in flight at once is what the version compares.
+
+**IT IS OFF BY EXACTLY ONE, AND IT MISSES SOME RUNS.** Measured across five runs on 2026-09-06:
+`v110 < v111` (HEAL-REVOKE-5), `v133 < v134` (-8), `v134 < v135` (-2), `v199 < v200` (-9), and
+**nothing at all on -3**, which is `PASS` with all four observers clean. So it is a race and not a
+fixed sequence: four runs in five, always exactly ONE occurrence.
+
+**IT IS NOT TIED TO MINTING, WHICH A FIRST READING OF THREE RUNS SAID IT WAS.** On -5, -8 and -2 it
+fell on an observer that mints a device; on -9 it is the VICTIM, a device coming back from a deferred
+wipe. What those have in common is a client ENUMERATING a large number of groups at once, which is
+the situation that puts a key-package publication beside a persister flush - and it is the observers
+doing nothing of the kind (the actor, every time) that never carry it. **Off by one means exactly
+TWO captures in flight and adjacent**, not a storm, which is why the pair of call sites can be named
+rather than hunted: the persister serialises itself, so the other one is the writer that does not go
+through it (the entry above).
+
+**SERIALISING THE WRITES WOULD BE WRONG, and that is why this is filed rather than fixed.** Chaining
+them makes the OLDER capture land first and be overwritten - two writes where one is needed, and a
+window in which the persisted state is the staler one. Assigning the version inside the chain
+instead would change what the tag means: it is a capture order, and the guard's whole correctness
+rests on that. The fix that would remove the line is to have ONE seam capture and persist, which is
+a change to the most safety-critical path in the client and wants its own session.
+
+**IT IS NOT FORGIVEN ON THE ROW.** The only expected-noise list that covers a freshly minted device
+is `FRESH_CLIENT_NARRATION`, shared by every runner, so adding the needle there is a CLASSIFIER
+rather than a per-row disposition - which is precisely what the HEAL rung's own note warns against.
+HEAL-REVOKE-5 therefore reports `PASS-DIRTY` honestly.
+
+**Read with the P2 next to it in `hex.ts`**: the `version === stored` case is a DIFFERENT event - two
+tabs seeding from the same stored value - and whether dropping the second tab's write can lose state
+is still open. This entry is about `version < stored` only.
 
 ### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
 
@@ -3422,6 +3556,12 @@ Three separate things, in the order they have to be answered:
    untouched by both fixes. What closes it is HEAL-REVOKE-1, -2 and -3 run against a build carrying
    `da0ce2f2`, not the inference that the cause found must have been the cause reported.
 
+   **AND THE ROWS THAT WERE OWED HAVE RUN.** HEAL-REVOKE-2 and -3 are `PASS-DIRTY` on `2862d958`
+   with `unmet: []` and `equalityGap: []`; their only dirt is the `arrived twice` line, a separate
+   defect fixed on 2026-09-05. **This entry no longer waits on "those rows have no runner yet"** -
+   the runner is `archive/healrevoke.mjs --row 2 / --row 3`, and what is owed is a re-run on a build
+   carrying the ack barrier, not a runner.
+
    **HEAL-REVOKE-1 RAN ON 2026-09-05 AND THE SYMPTOM DOES NOT REPRODUCE - `PASS`, clean, `unmet: []`
    on `2862d958`.** A device that held 7 of 7 rows plus a group minted for the row was revoked
    through the product's own panel; the server recorded the decision in 276 ms and the device left
@@ -3491,12 +3631,24 @@ Three separate things, in the order they have to be answered:
    complete, so the user does not know to retry - it needs to know its own expected count and report
    the shortfall, per the standing rule that a correct mechanism with no report is found by hand a
    day late.
-3. **A local tombstone was treated as a live conversation for de-duplication.** The peer had deleted
-   the 1v1; locally it sat pending deletion; the NEW conversation with that same peer was then
-   dropped, apparently as a duplicate of the record that was on its way out. Whatever key the dedup
-   uses must exclude anything pending deletion, or the pending state has to be resolved before the
-   new conversation is accepted - a record that exists only to be removed must not be able to refuse
-   its own replacement.
+3. **FIXED 2026-09-06, NOT SHIPPED - a local tombstone was treated as a live conversation for
+   de-duplication.** The peer had deleted the 1v1; locally it sat pending deletion; the NEW
+   conversation with that same peer was then dropped as a duplicate of the record that was on its
+   way out.
+
+   **TWO SITES ASKED THE SAME QUESTION AND NEITHER LOOKED AT THE LIFECYCLE**, and the second is far
+   worse than the reported symptom. `discoverMissingGroups` matched on the peer alone and declined
+   to create the replacement - that is the user's report. `mergeDirectConversationDuplicates` groups
+   a peer's records the same way, picks the most RECENT as canonical, and deletes every other one
+   **locally AND on the server** (`deleteGroupOnServer`) - so a tombstone with a newer `updatedAt`
+   takes the fresh conversation's messages and destroys the fresh group **for both parties**. The
+   mirror ordering is not harmless either: a record kept deliberately until the user removes it
+   would vanish on a login, its messages surfacing inside a conversation the user thinks is new.
+
+   **ONE PREDICATE, BOTH SITES**: `canRepresentThePeer` in `conversations.ts` - a `removed` record is
+   a tombstone and takes no part in de-duplication, as neither target nor source. Five tests, both
+   orderings of the merge plus an anti-vacuity case on each site, because "stop de-duplicating"
+   would pass every tombstone case and resurrect the duplicate-DM defect the function exists for.
 
 **This is HEAL's, by the user's own framing** (*"On y reviendra au moment ou on fera la campagne
 HEAL"*). Rung 16 is where it gets armed, and item 1 now carries FOUR rows rather than needing a

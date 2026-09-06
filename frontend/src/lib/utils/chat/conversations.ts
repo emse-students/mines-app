@@ -17,7 +17,7 @@ import { HISTORY_BATCH_MAX_GROUPS } from '$lib/mls-client/mlsDeliveryApi';
 import { buildUserGroupSyncIndex } from './groupSyncEligibility';
 import { migrateFromLocalStorage } from '../migration';
 import type { IMlsService } from '$lib/mlsService';
-import type { Conversation } from '$lib/types';
+import type { Conversation, ConversationLifecycle } from '$lib/types';
 import { getUserDisplayNameSync, peekUserDisplayName } from '$lib/utils/users/displayName';
 import { foldForSearch } from '$lib/utils/textFold';
 import { forgetGroupReconciliation } from './historyReconcile';
@@ -93,6 +93,31 @@ export function toConversationMeta(
     readWatermarks: convo.readWatermarks,
     historyFloor: convo.historyFloor,
   };
+}
+
+/**
+ * Whether a record may stand in for "the conversation with that peer" - the ONE question every
+ * de-duplication site asks, answered in one place.
+ *
+ * A `removed` record is a TOMBSTONE: deleted by a peer, an exclusion, or a local deletion the
+ * server has not answered yet. It stays in the store until a MANUAL deletion (rules 2 and 4), so it
+ * is not absent - and both de-dup sites matched it like any other conversation with that peer.
+ *
+ * REPORTED BY THE USER 2026-08-23, and it is the whole of this predicate: *"une conversation 1v1
+ * avec quelqu'un [qui] avait ete en attente de suppression locale sur cet appareil ... a fait
+ * barrage a la reception de la nouvelle conversation avec ce pair"*. **A record that exists only to
+ * be removed must not be able to refuse its own replacement.** The two sites failed differently and
+ * the second is the worse of the two: discovery merely declined to create the new conversation
+ * ({@link ensureConversationForServerGroup}), while {@link mergeDirectConversationDuplicates} picks
+ * the most RECENT of the group as canonical and deletes the others - locally AND on the server - so
+ * a tombstone newer than the fresh group takes the fresh group's messages and destroys the group
+ * for BOTH parties.
+ *
+ * A tombstone therefore takes no part in either: it keeps its own row and its own messages, and it
+ * cannot be a merge target or a merge source.
+ */
+export function canRepresentThePeer(record: { lifecycle: ConversationLifecycle }): boolean {
+  return record.lifecycle !== 'removed';
 }
 
 /**
@@ -482,6 +507,10 @@ export async function mergeDirectConversationDuplicates(
 ): Promise<ConversationMeta[]> {
   const directByPeer = new Map<string, ConversationMeta[]>();
   for (const meta of convMetas) {
+    // A TOMBSTONE IS NOT A CANDIDATE - {@link canRepresentThePeer}. Left in, it competes for
+    // `canonical` on `updatedAt` alone, and the loser is DELETED locally and on the server: a
+    // conversation the user has just started, destroyed for both parties by the reconciler.
+    if (!canRepresentThePeer(meta)) continue;
     const identity = deriveConversationIdentity(meta.name, userId, meta.id);
     if (identity.conversationType !== 'direct' || !identity.directPeerId) continue;
     const peer = identity.directPeerId.toLowerCase();

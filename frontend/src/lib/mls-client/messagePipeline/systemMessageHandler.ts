@@ -836,7 +836,18 @@ export async function handleSystemEvent(
               : {}),
           }));
         if (toAdd.length > 0) {
-          log(`[HISTORY_BUNDLE] ${toAdd.length} messages received from the inviting peer`);
+          // NAMES ITS CONVERSATION AND ITS SENDER, like the pin line above it. This said
+          // "from the inviting peer" and nothing else - wrong twice on a device rejoining forty
+          // groups at once: the sender is whichever member the server's RANDOM election picked, not
+          // an inviter, and a reader could not tell which of the forty conversations was repaired.
+          // The repair is the one event this whole subsystem exists to produce, and it was the only
+          // line in this block a reader could not attribute. It also made a campaign clause
+          // unsatisfiable: HEAL-REVOKE-4 filters each client's trail by the group's id prefix, so
+          // `theAskerAPPLIEDTheAnswer` could never be true, on any run, however well the product
+          // behaved.
+          log(
+            `[HISTORY_BUNDLE] ${toAdd.length} messages received for ${convoKey.slice(0, 8)}… from ${senderNorm.slice(0, 8)}`
+          );
           if (batchAddMessages) {
             await batchAddMessages(toAdd, convoKey);
           } else {

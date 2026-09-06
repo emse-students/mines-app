@@ -52,7 +52,6 @@ export class WebMlsService extends BaseMlsService {
   /** Maximum consecutive pings without any server activity before we force-close. */
   private static readonly MAX_MISSED_HEARTBEATS = 3;
   /** Last persisted MLS state snapshot used as worker bootstrap input. */
-  private lastKnownState: Uint8Array | undefined;
   /** Dedicated worker for expensive key package generation. */
   private keyPackageWorker: Worker | null = null;
   /** Feature flag for workerized key package generation (enabled by default). */
@@ -636,7 +635,6 @@ export class WebMlsService extends BaseMlsService {
     this.userId = userId;
     this.delivery.userId = userId;
     this.freshStart = !state;
-    this.lastKnownState = state ? state.slice() : undefined;
 
     // Per-user device ID - prevents two users in the same browser from sharing a
     // device ID, which would cause the delivery service to route the welcome message
@@ -665,7 +663,6 @@ export class WebMlsService extends BaseMlsService {
             await this.loadStateWithKey(deviceKeyB64, migrated);
             // Persist immediately: leaving the legacy blob in place would replay this migration
             // on every launch, and any later failure would resurface the false rotation error.
-            this.lastKnownState = migrated.slice();
             await saveMlsState(userId, migrated);
             return;
           } catch (migrationError) {
@@ -752,7 +749,6 @@ export class WebMlsService extends BaseMlsService {
     // Carry the plain snapshot's version onto the encrypted bytes so the off-thread Argon2 step
     // cannot reorder the write relative to a concurrent, fresher save.
     propagateMlsSnapshotVersion(plain, encrypted);
-    this.lastKnownState = encrypted.slice();
     return encrypted;
   }
 
@@ -762,7 +758,6 @@ export class WebMlsService extends BaseMlsService {
    */
   async changeDeviceKey(newDeviceKeyB64: string): Promise<void> {
     const newState = await this.saveState(newDeviceKeyB64);
-    this.lastKnownState = newState.slice();
     await saveMlsState(this.userId, newState);
     console.log('[MLS] Device key changed - state re-encrypted and persisted.');
   }
@@ -876,7 +871,6 @@ export class WebMlsService extends BaseMlsService {
         // Tag here: this synchronous save-and-write turn has no interleaving await, so the version
         // reflects the just-captured state and orders correctly against a concurrent encrypted flush.
         await saveMlsState(this.userId, tagMlsSnapshot(stateBytesToPersist));
-        this.lastKnownState = stateBytesToPersist.slice();
       } catch (e) {
         console.warn('[MLS] Auto-save failed in WASM mode:', e);
       }
@@ -1085,12 +1079,15 @@ export class WebMlsService extends BaseMlsService {
              * Refusing costs nothing: the decrypted plaintexts were already handed to the caller,
              * so only the catch-up's ratchet advance is thrown away, and the next replay redoes it.
              */
-            const swapped = await this.installUnlessOvertaken(
+            // The verdict is not read here because a REFUSAL reports itself: `installUnlessOvertaken`
+            // warns with the reason before returning false, so a caller storing the boolean would be
+            // a second place to keep the same fact - which is what the field deleted with this line
+            // was, written five times and read nowhere.
+            await this.installUnlessOvertaken(
               `catch-up (${groupId.slice(0, 8)}…)`,
               mutationsAtSnapshot,
               () => this.reloadClientFromPlainState(finalState)
             );
-            if (swapped) this.lastKnownState = finalState.slice();
           }
         } catch (e) {
           // A page or finalize failed: leave the live client at the untouched snapshot

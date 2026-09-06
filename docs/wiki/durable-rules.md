@@ -254,16 +254,36 @@ Deep links, system events, rosters and the channel/DM asymmetry are on those two
 
 ## Outbound delivery -> [chat](frontend/modules/chat.md), [history-reconciliation](protocols/history-reconciliation.md), [chat-delivery](services/chat-delivery.md), [mobile](frontend/mobile.md)
 
-- **BOTH LEGS OF AN EXCHANGE MUST SURVIVE THE SAME FAILURES, AND A CHANNEL IS PART OF THE
-  CONTRACT.** The history solicitation reaches its responder as a `control` frame - addressed to a
-  device, carried outside the group, immune to epochs. The ANSWER goes back as an ordinary MLS
-  group message. Measured 2026-09-06: a device that rejoins by EXTERNAL COMMIT creates the new
-  epoch, asks over `control`, and the responder - milliseconds behind, not yet having applied that
-  commit - replies at the OLD epoch, which the joiner holds no secrets for and never will. The
-  reply is unreadable BY CONSTRUCTION, the delivery service reports `online=true ... realtime=1`,
-  and every layer believes it succeeded. **Ask of any request/response pair whether the response
-  can be broken by something the request was deliberately protected from** - and when the two legs
-  travel differently, that difference is the bug, not an implementation detail.
+- **A RECORD THAT EXISTS ONLY TO BE REMOVED MUST NOT BE ABLE TO REFUSE ITS OWN REPLACEMENT.** A
+  `removed` conversation is a tombstone - deleted by a peer, an exclusion, or a local deletion the
+  server has not answered - and it stays in the store until a MANUAL deletion, so it is present and
+  matched like any other. Two independent de-duplication sites keyed on the peer alone: one declined
+  to create the replacement (the user's 2026-08-23 report), and the login-time merge, which keeps
+  the most RECENT record and deletes the others locally AND on the server, absorbed a conversation
+  the user had just started and deleted its group for the other party too. **When two sites ask the
+  same question, the question is a predicate with a name, not a condition each writes for itself** -
+  they had diverged on nothing and were wrong together. And the anti-vacuity half matters as much as
+  the fix: a guard that switched de-duplication off would satisfy every tombstone case while
+  resurrecting the duplicate-DM defect the merge exists for. [chat](frontend/modules/chat.md)
+- **BEING REACHABLE AND BEING ABLE TO ROUTE ARE TWO FACTS, AND ONE STRICTLY PRECEDES THE OTHER.**
+  `externalJoin` publishes this device's leaf: from the instant it returns, every member may address
+  the group and the delivery service routes to it. What makes an arriving frame usable is a
+  conversation row, and that row was written by a DIFFERENT sweep over the SAME server list
+  (`discoverMissingGroups`, fire-and-forget, its own cadence) - so the order between the two halves
+  of one act was decided by whichever finished first. Measured 2026-09-06 (HEAL-REVOKE-4): the join
+  won by five seconds, and the member's answer to this device's own history solicitation - sent in
+  the same second as the join - was refused `absent-conversation` and left in the server queue, where
+  nothing collected it until the next reconnect. Every layer reported success:
+  `online=true ... realtime=1`. **Never let a device become addressable for something it is not yet
+  ready to be addressed about**, and when one act is written by two sweeps, the order is not an
+  implementation detail - it is the contract. The Welcome path had it right all along by doing both
+  under one lock; the fix is to make the other path the same shape, not to add a trigger that
+  repairs the gap afterwards. [history-reconciliation](protocols/history-reconciliation.md)
+- **A BUFFER'S DISCHARGE MUST BE THE EVENT THAT MAKES ITS CONDITION FALSE, NOT A LARGER EVENT THAT
+  USUALLY CONTAINS IT.** The same frame's reason, `absent-conversation`, was collected only by the
+  boot restore - a one-shot that had already fired, and that cannot by construction produce a
+  conversation the local store has never held. A global trigger for a per-group condition is a
+  trigger that is wrong exactly when the condition is new. [chat](frontend/modules/chat.md)
 - **MAKING ONE THING WAIT ON ANOTHER INHERITS ITS TERMINATION PROPERTIES, INCLUDING THE ONES
   NOBODY HAD TO THINK ABOUT.** `ackMessagesWithRetry` bounded how many times it gives up - four
   attempts - and bounded nothing about how long ONE attempt may take: its `fetch` carried no

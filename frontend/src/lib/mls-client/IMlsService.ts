@@ -662,6 +662,17 @@ export interface IMlsService {
    */
   notifyConversationsRestored(): void;
 
+  /**
+   * One conversation now EXISTS locally, so any frame buffered for it can be asked for again.
+   *
+   * THE PER-GROUP HALF OF {@link notifyConversationsRestored}, and the half a device joining a group
+   * it has never had needs. The boot restore reads the LOCAL store, so it can only produce
+   * conversations this device already knew about; one created while the device was away appears
+   * later, from discovery, when that one-shot trigger is long past. A frame that arrived in between
+   * is left in the server queue with nothing scheduled to collect it.
+   */
+  notifyConversationAvailable(groupId: string): void;
+
   // Group management
   /** Returns the list of group IDs for which this device holds local MLS state. */
   getLocalGroups(): string[];

@@ -38,7 +38,21 @@ const tally = new Map<UnackedReason, { count: number; groups: Set<string> }>();
  * log line silently cancelling a retry.
  *
  * Bounded by the number of groups this device is in, and every entry is discharged by an event
- * rather than a clock: a Welcome for the group, or the conversation store finishing its restore.
+ * rather than a clock: a Welcome for the group, or the conversation becoming available.
+ *
+ * THE SECOND EVENT USED TO BE "THE CONVERSATION STORE FINISHED ITS RESTORE", WHICH IS A BOOT EDGE -
+ * a GLOBAL trigger for a PER-GROUP condition, and therefore wrong exactly when the condition is new.
+ * The restore reads the LOCAL store, so it cannot produce a conversation this device has never had;
+ * one appearing later has nothing scheduled to collect what is waiting on it. It is discharged per
+ * group now, at the moment that group's conversation exists, which is when the frame actually
+ * became readable. See {@link takeGroupAwaiting}.
+ *
+ * THAT IS THE NET AND NOT THE MECHANISM, and the distinction matters for what a line from it means.
+ * The case that exposed it - HEAL-REVOKE-4, 2026-09-06 - was a device made REACHABLE for a group
+ * five seconds before it could route for it, and that window is deleted at its source: every path
+ * that makes this device a member now writes the conversation row first
+ * ({@link ensureConversationForServerGroup}). So an `absent-conversation` frame is no longer an
+ * expected step in joining, and a discharge here is a window somebody re-opened.
  */
 const awaiting = new Map<UnackedReason, Set<string>>();
 
@@ -58,6 +72,21 @@ export function noteUnackedFrame(groupId: string, reason: UnackedReason): void {
     awaiting.set(reason, waiting);
   }
   waiting.add(groupId);
+}
+
+/**
+ * Discharges ONE group, for the events that are per-group rather than global. True if it was owed.
+ *
+ * The whole-reason {@link takeGroupsAwaiting} answers a global edge - a reconnect, a boot restore.
+ * This answers "THIS conversation now exists", which is the only fact that makes a frame buffered
+ * as `absent-conversation` readable, and the only one a device joining a group it has never had can
+ * ever produce.
+ */
+export function takeGroupAwaiting(reason: UnackedReason, groupId: string): boolean {
+  const waiting = awaiting.get(reason);
+  if (!waiting?.delete(groupId)) return false;
+  if (waiting.size === 0) awaiting.delete(reason);
+  return true;
 }
 
 /**

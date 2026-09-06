@@ -7,6 +7,8 @@ import { persistMlsStateAfterMutation, purgeLocalConversationRecord } from './gr
 import { classifyServerStatus } from './groupLifecycle';
 import { markGroupNotReady, clearGroupNotReady, readNotReadySince } from './notReadyRegistry';
 import { reconcileGroup } from './historyReconcile';
+import { pendingGroupExitIds } from './pendingGroupExits';
+import { ensureConversationForServerGroup } from './serverGroupConversation';
 import { retireConversation } from './conversations';
 import { holdsGroupState } from './groupUsability';
 
@@ -226,6 +228,25 @@ export async function requestReAdd(groupId: string, deps: RecoveryDeps): Promise
       return;
     }
     // Transient network error: skip this round, the watchdog retries on its cadence.
+    //
+    // AND IT NOW REALLY DOES SKIP. This branch fell through and attempted the join anyway, on a
+    // group whose server row could not be read - so the conversation the join makes this device
+    // reachable for could not be described either (see the block before `externalJoin`: `isGroup`
+    // decides whether the row is a DM, and guessing it is guessing the row's name and its key).
+    // Nothing is lost by waiting one cadence for an answer that is the input to both steps.
+    //
+    // THE COOLDOWN IS ARMED THOUGH NO ATTEMPT WAS MADE, and that half is not optional. The
+    // watchdog invokes this seam every FIVE seconds; the two probes above are what it costs to
+    // reach this line, so returning without arming anything turns an unreachable server into two
+    // HTTP round trips every five seconds for as long as it stays unreachable - the exact shape
+    // {@link findByGroupId} records costing every received DM the same. `markGroupNotReady` is
+    // deliberately NOT set with it: that marker means "this device owes a recovery", and what this
+    // branch knows is only that it could not ask.
+    lastReAddAt.set(groupId, now);
+    deps.log(
+      `[READD] ${groupId.slice(0, 8)}... server metadata unreadable - deferring the join one round`
+    );
+    return;
   }
 
   if (holdsGroupState(deps.mlsService, groupId)) {
@@ -270,6 +291,61 @@ export async function requestReAdd(groupId: string, deps: RecoveryDeps): Promise
   }
   if (owed) {
     await askAMemberToReAddUs(groupId, deps, 'invited, Welcome owed by a member');
+    return;
+  }
+
+  // THE ROW BEFORE THE LEAF, AND THE ORDER IS THE WHOLE OF THIS BLOCK.
+  //
+  // `externalJoin` PUBLISHES our leaf: from the instant it returns, every member may address this
+  // group and the delivery service routes to us - while a frame arriving for a group this device
+  // holds no conversation row for is answered `false` and left in the server queue. So the two
+  // facts are not interchangeable, and one strictly precedes the other: a device must not become
+  // REACHABLE for a group it cannot yet ROUTE for.
+  //
+  // It used to take its row from `discoverMissingGroups`, a different sweep over the same server
+  // list, running fire-and-forget on its own cadence - so the order was decided by whichever
+  // finished first. Measured on HEAL-REVOKE-4 (2026-09-06): the join won by five seconds, and the
+  // member's answer to this device's OWN history solicitation - sent in the same second as the join
+  // - landed in the gap. The Welcome path never had it, because `setupMessageHandler` writes the
+  // row inside the lock that installs the group; this is that same step, for this path.
+  //
+  // A REFUSAL IS NOT A REASON TO JOIN ANYWAY. `exit-owed` is a decision this device already took
+  // and terminates the recovery on that proof; the other two clear by themselves and the watchdog
+  // re-invokes this seam on its cadence. Joining first would buy nothing but the window above.
+  //
+  // `isGroup` IS READ, NEVER DEFAULTED. It decides whether the row is a DM, which decides its
+  // display name and its peer - so `undefined` is a question the server did not answer, not a
+  // "no". The column is non-null server-side and the response carries the whole entity, so this
+  // branch is an anomaly worth a line rather than a case to paper over with a default.
+  if (meta === null || meta.isGroup === undefined) {
+    deps.log(
+      `[READD] ${groupId.slice(0, 8)}... join deferred - the server row does not say whether this is a DM`
+    );
+    return;
+  }
+  const routable = await ensureConversationForServerGroup(
+    { groupId, name: meta.name, isGroup: meta.isGroup },
+    {
+      mlsService: deps.mlsService,
+      userId: deps.userId,
+      conversations: deps.conversations,
+      saveConversation: deps.saveConversation,
+      owedExits: await pendingGroupExitIds(deps.storage),
+      log: deps.log,
+    }
+  );
+  if (routable === 'exit-owed') {
+    // Not `stopRecovering`: there is no conversation to retire, and the exit drain - not this seam -
+    // owns what happens next. Dropping the bookkeeping is what stops the watchdog enumerating a
+    // group this device is on its way out of, every five seconds, for as long as the exit is owed.
+    cancelReAdd(groupId);
+    clearGroupNotReady(deps.userId, groupId);
+    return;
+  }
+  if (routable !== 'existed' && routable !== 'created') {
+    deps.log(
+      `[READD] ${groupId.slice(0, 8)}... join deferred - nothing could route for it yet (${routable})`
+    );
     return;
   }
 
