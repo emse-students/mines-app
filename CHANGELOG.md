@@ -13,20 +13,27 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
-- **A device purged 49 of the 50 prekeys it had just published, so its pool never filled and it
-  minted fifty more on every connection.** Found by keeping the raw logcat of one NOTIF-1b run on a
-  Mi 9T and counting the lines: `needed=49` on every connection, and immediately after each top-up
-  `reconcilePublishedKeyPackages: purged 49/50 orphaned prekey(s)`. The arithmetic pins which 49 -
-  `needed=49` means the server held 1, the client published 49 to make 50, and 49 were purged, so
-  the packages it threw away were the ones it had just minted. In that single two-minute run the
-  phone minted **197 pool prekeys and 4 fallbacks**, ~389 kB of bundles, with **zero**
-  `NoMatchingKeyPackage`, zero storms and zero background sends. This was the ordinary path.
+- **A device disowned 49 prekeys thirty-one seconds after publishing them, and had the server delete
+  them.** Found by keeping the raw logcat of one NOTIF-1b run on a Mi 9T and then asking the server
+  what it had actually seen. Client side: `needed=49` on every connection, then
+  `reconcilePublishedKeyPackages: purged 49/50 orphaned prekey(s)`. Server side, same run, same
+  device - `REGISTER_PREKEYS count=49` at 18:15:44 and `PRUNE_PREKEYS deleted=49` at 18:16:15. A
+  device cannot have lost the private key of a package it minted half a minute earlier, so
+  `keyPackageHasPrivate` answered `false` about this device's own fresh mints: a broken seam between
+  minting and asking.
 
-  The cost compounds, because nothing prunes a bundle below 84 days: `mls.bin` went from
-  19 548 753 to **20 812 360 bytes in one day** and a single checkpoint from 17.1 s to **48.4 s**.
-  It also failed a row that had passed the same morning - NOTIF-1b reported `notifiedInMs = 20887`
-  against 2 152 ms on the same build, which is not a notification defect but a phone sitting inside
-  a forty-eight-second checkpoint.
+  **The first reading of the client log was wrong and the server refuted it.** It looked like the
+  purge was undoing every top-up so the pool never filled; in fact 148 prekeys were inserted, 49
+  pruned and 1 remains, so **98 were legitimately CLAIMED by peers** - the preflight for that run
+  listed ~25 leftover test groups owed a delete, and every re-add consumes one. Claims empty the
+  pool here, not the purge. What survives is the disowning itself, which is real either way.
+
+  The mint rate is therefore mostly honest, and that is what makes the local store's behaviour the
+  problem: nothing deleted a bundle before 2026-09-06 and it now sheds only at 84 days. `mls.bin`
+  went from 19 548 753 to **20 812 360 bytes in one day**, a single checkpoint from 17.1 s to
+  **48.4 s**, and a row that had passed that morning failed on it - NOTIF-1b reported
+  `notifiedInMs = 20887` against 2 152 ms on the same build, which is not a notification defect but
+  a phone sitting inside a forty-eight-second checkpoint.
 
   `reconcilePublishedKeyPackages` now refuses to purge any prekey THIS process published, and says
   so at `error`. **The guard is provenance, not a proportion**, and that distinction is the whole

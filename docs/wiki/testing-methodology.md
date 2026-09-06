@@ -46,6 +46,26 @@ Grouped by what they protect, and ordered inside each group by how expensive the
 
 ### What a verdict may rest on
 
+**A COUNT IN A CLIENT LOG IS A CLIENT'S BELIEF, AND THE SERVER KEEPS THE FACT - ASK IT BEFORE
+CONCLUDING.** On 2026-09-06 a phone's logcat showed `needed=49` on every connection and
+`purged 49/50 orphaned prekey(s)` right after each top-up. That reads as one closed loop - the
+reconciliation undoing its own refill so the pool can never fill - and it is a coherent story, an
+arithmetic that checks out, and **wrong**. The delivery service's own log and one `GROUP BY` over
+`one_time_key_package` said what really happened: 148 prekeys inserted, 49 pruned, 1 remaining, so
+**98 were claimed by peers** at about one a second, because the preflight for that very run had
+listed ~25 leftover test groups still owed a delete. Claims were emptying the pool, not the purge.
+
+What survived contact with the server was smaller and sharper than the story: the device disowned 49
+prekeys **thirty-one seconds after publishing them** (`REGISTER_PREKEYS count=49` at 18:15:44,
+`PRUNE_PREKEYS deleted=49` at 18:16:15), which no amount of claim traffic explains. **The
+generalisation is not "logs lie".** It is that a client's `needed=N` is a subtraction over a number
+it fetched, so it reports the pool's LEVEL and can say nothing about the flow that set it - and a
+level is consistent with many flows. Where two mechanisms could produce the same number, the reading
+is a hypothesis until the side that keeps the ledger is asked, and here that cost two commands. The
+same trap as the campaign's own rule about a rate: a name believed before it is measured against the
+population it runs on.
+
+
 #### 1. A verdict must never be computed over a projection of its own evidence
 
 `heal-web.mjs` filtered the console through a **display** regex, then ran its matchers over the
