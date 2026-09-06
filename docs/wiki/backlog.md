@@ -4769,6 +4769,31 @@ The cause of the churn is still open, and the three candidates below stand - but
 bytes match what this session minted and `purged` when they do not. **Nobody has yet seen which line
 it prints on a device**, and that single observation settles candidate 1 against candidates 2 and 3.
 
+**AND THE LOOP IS NOT VISIBLE IN THE ACTIVE POPULATION EITHER** - 103 production devices whose
+fallback `key_package` was refreshed inside three days, crossed against when their prekeys were
+minted:
+
+| what the device did | devices |
+| --- | --- |
+| kept its pool across connections (prekeys older than the last `key_package`) | **55**, avg pool 51 |
+| topped up incrementally (several mint timestamps) - **the design working** | **39** |
+| single batch of exactly 50, minted at the last connection | 27 |
+
+The middle row is the important one: 39 devices are doing exactly what the top-up was written to do,
+`needed = 50 - existing` with `existing` in the forties. And the 55 prove the pool SURVIVES a
+reconnection, which a purge loop would make impossible.
+
+**THE 27 CANNOT BE READ AS THE LOOP, AND SAYING OTHERWISE WOULD REPEAT THIS ENTRY'S ORIGINAL ERROR.**
+A device connecting for the FIRST time mints 50 in one batch at that connection. So does a device
+whose pool peers had fully consumed. Both produce the identical signature, and **a snapshot holds no
+history that separates them**. What the population settles is the severity claim; what it cannot
+settle is the mechanism.
+
+**SO THE ONE OBSERVATION STILL OWED IS THE GUARD'S LINE**, from a device that reconnects while
+holding a published batch: `REFUSED to purge N/M` means the round-tripped bytes matched what the
+session minted, which kills candidate 1 and leaves the manager identity and the race; `purged N/M`
+means they did not, which is candidate 1. One line, and nobody has seen it yet.
+
 **THE 32 ARE THEIR OWN QUESTION**, and none of them is revoked. Whether they are dormant devices that
 never reconnected, or devices genuinely stuck with an empty pool, is unanswered - `MAX(createdAt)`
 per device against last-seen would settle it.
