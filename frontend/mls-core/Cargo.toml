@@ -25,6 +25,9 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 test-keystore = []
 
 [dev-dependencies]
+# Already a runtime dependency; the integration test `state_weight` re-reads a saved state to
+# weigh it by storage label, which needs the same decoder the writer used.
+ciborium = "0.2.2"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]

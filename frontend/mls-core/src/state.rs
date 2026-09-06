@@ -208,7 +208,7 @@ impl MlsManager {
                 }
             }
 
-            Ok(Self {
+            let manager = Self {
                 provider,
                 keypair,
                 credential,
@@ -223,7 +223,34 @@ impl MlsManager {
                 // instead of dependent on what the user does next, and the cost is one
                 // serialization - never the decode this change exists to remove.
                 state_snapshot: RefCell::new(StateSnapshotCache::new_dirty()),
-            })
+            };
+
+            // SHED WHAT THIS DEVICE CAN NO LONGER USE, ONCE PER LOAD.
+            //
+            // Nothing else ever deletes a key package bundle, and two callers mint them without
+            // bound - a fresh last-resort package on every connection, and up to 50 more per
+            // `republishKeyMaterial`. See `prune_expired_key_packages` for the measurement and for
+            // why an elapsed lifetime is the only signal that cannot race a join.
+            //
+            // HERE rather than on a timer: a load is the one moment that happens exactly once per
+            // session, needs no scheduling, and already has the whole state in hand. A clock would
+            // add a second path to the same state for no gain, and the rule this repository keeps
+            // is that termination comes from a proof and never from a timer.
+            //
+            // A FAILURE HERE MUST NOT FAIL THE LOAD. Pruning is maintenance: a device that cannot
+            // shed old bundles still works, where a device that refuses to load has lost
+            // everything. It is logged at a level that accuses, because a prune that never succeeds
+            // is the leak coming back and nothing else would say so.
+            match manager.prune_expired_key_packages() {
+                Ok(0) => {}
+                Ok(n) => log::info!("load_or_create: pruned {} expired key package(s)", n),
+                Err(e) => log::warn!(
+                    "load_or_create: could not prune expired key packages: {}",
+                    e
+                ),
+            }
+
+            Ok(manager)
         } else {
             // Case 2: First creation
             let ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -367,6 +394,139 @@ impl MlsManager {
     /// A one-time prekey for the server-side pool: consumed by the first Welcome built on it.
     pub fn generate_key_package(&self) -> Result<Vec<u8>, MlsError> {
         self.build_key_package(false)
+    }
+
+    /// Deletes every stored `KeyPackage` bundle whose lifetime has ELAPSED. Returns how many went.
+    ///
+    /// ## The leak this closes, measured rather than assumed
+    ///
+    /// Minting a key package writes its private bundle to the provider's storage, and until now
+    /// NOTHING ever deleted one that was not consumed by a Welcome. The reconciliation that exists
+    /// runs the other way - `reconcilePublishedKeyPackages` purges the SERVER of prekeys whose
+    /// private key is gone locally - so a bundle the server has stopped publishing is kept for
+    /// ever. Two callers make that unbounded:
+    ///
+    /// - `generateKeyPackageImpl` republishes a FRESH last-resort package on every connection, and
+    /// - `republishKeyMaterial` calls `deleteAllOneTimePrekeys()` and mints up to 50 more, once per
+    ///   30 s, on every `NoMatchingKeyPackage` storm.
+    ///
+    /// `tests/state_weight.rs` weighs the result: a bundle is 1 936 bytes, and 200 of them are
+    /// 60% of a state that also holds 41 groups. A phone through the 2026-09 healing campaign
+    /// reached a 19 548 753-byte `mls.bin` that took 17 s to checkpoint and 22 s to unlock - about
+    /// ten thousand accumulated bundles, which is ~200 purge-and-remint rounds.
+    ///
+    /// ## Why EXPIRY is the discriminator, and not "the server no longer publishes it"
+    ///
+    /// "Unpublished" is not the same as "dead": the delivery service DELETES a one-time prekey as
+    /// it hands it out, so a bundle can be absent from the server precisely because a peer is about
+    /// to send the Welcome built on it. Deleting on that signal would race a join and lose it.
+    ///
+    /// An elapsed lifetime carries no such ambiguity. `not_after` is set at mint time and openmls
+    /// defaults it to 84 days; a Welcome that referenced an expired KeyPackage is invalid under
+    /// RFC 9420 and every joiner is entitled to refuse it. So this deletes only what could not have
+    /// been used anyway, needs no server round-trip, and cannot race anything - which is what makes
+    /// it safe to run unattended at load. It BOUNDS the leak at (mint rate x 84 days) rather than
+    /// letting it grow with the life of the install.
+    ///
+    /// A bundle that fails to decode is LEFT ALONE and counted in the log: it is a byte pattern
+    /// this build does not understand, and deleting what one cannot read is how a state gets lost.
+    ///
+    /// Reads the clock ONCE and hands it to [`Self::prune_key_packages_expired_at`], which is where
+    /// the decision actually lives - see there for why the two are separate.
+    pub fn prune_expired_key_packages(&self) -> Result<usize, MlsError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            // A clock before the epoch cannot say anything is expired, and guessing would delete
+            // key material. Prune nothing and say so.
+            .map_err(|e| {
+                MlsError::OpenMls(format!("System clock is before the UNIX epoch: {e}"))
+            })?;
+        self.prune_key_packages_expired_at(now)
+    }
+
+    /// [`Self::prune_expired_key_packages`] with the current time given rather than read.
+    ///
+    /// THE CLOCK IS A PARAMETER SO THE RULE CAN BE TESTED WITHOUT ASSERTING ON ONE. `Lifetime`'s own
+    /// `is_valid()` consults `SystemTime::now()` internally, so a test written against it could only
+    /// prove "nothing minted a moment ago is expired" - it could never reach the branch that
+    /// deletes, which is the entire point of this function. Passing `now` in lets a test mint
+    /// normally and then ask what the state will look like in a hundred days, which is a statement
+    /// about the RULE and not about the machine it ran on.
+    ///
+    /// Compares against `not_after` alone. `is_valid()` also refuses a package whose `not_before`
+    /// is still in the future, and that is a package this device minted moments ago on a machine
+    /// with a skewed clock - the one thing that must NOT be deleted.
+    pub fn prune_key_packages_expired_at(&self, now_secs: u64) -> Result<usize, MlsError> {
+        // `openmls_memory_storage` builds every key as `label || json(id) || u16 version`, so the
+        // label is a plain prefix and a scan attributes each entry to exactly one owner.
+        const KEY_PACKAGE_LABEL: &[u8] = b"KeyPackage";
+
+        let storage = self.provider.storage();
+        let mut values = storage
+            .values
+            .write()
+            .map_err(|e| MlsError::OpenMls(format!("Storage lock poisoned: {e}")))?;
+
+        let mut undecodable = 0usize;
+        let mut doomed: Vec<Vec<u8>> = Vec::new();
+        for (k, v) in values.iter() {
+            if !k.starts_with(KEY_PACKAGE_LABEL) {
+                continue;
+            }
+            let Ok(bundle) = serde_json::from_slice::<KeyPackageBundle>(v) else {
+                undecodable += 1;
+                continue;
+            };
+
+            // THE ENTRY MUST PROVE IT IS THE KEY PACKAGE ITS OWN KEY NAMES, AND NOT MERELY DECODE.
+            //
+            // The prefix and the decode both look like discrimination and neither is: an empty
+            // prefix passes every one of this file's tests, because serde ignores unknown fields
+            // and it is the decode that ends up refusing group state - by luck, on a struct that
+            // happens not to carry these three field names. Luck is not a safety property when the
+            // failure mode is a device that saves and loads while having silently lost every
+            // conversation.
+            //
+            // So recompute the hash reference and require the stored key to contain it. The key is
+            // `label || json(hash_ref) || version` by construction, so this is exact, it is what
+            // makes the delete provably confined to key packages, and it costs one hash on an entry
+            // that is about to be dropped anyway.
+            let Ok(hash_ref) = bundle.key_package().hash_ref(self.provider.crypto()) else {
+                undecodable += 1;
+                continue;
+            };
+            let Ok(named) = serde_json::to_vec(&hash_ref) else {
+                undecodable += 1;
+                continue;
+            };
+            if !k.windows(named.len()).any(|w| w == named.as_slice()) {
+                undecodable += 1;
+                continue;
+            }
+
+            if bundle.key_package().life_time().not_after() < now_secs {
+                doomed.push(k.clone());
+            }
+        }
+
+        for key in &doomed {
+            values.remove(key);
+        }
+        let pruned = doomed.len();
+        drop(values);
+
+        if pruned > 0 || undecodable > 0 {
+            log::info!(
+                "prune_expired_key_packages: removed {} expired bundle(s), left {} undecodable",
+                pruned,
+                undecodable
+            );
+        }
+        if pruned > 0 {
+            self.mark_state_dirty();
+        }
+        Ok(pruned)
     }
 
     /// The device's static fallback, served by the delivery service to every peer that finds the

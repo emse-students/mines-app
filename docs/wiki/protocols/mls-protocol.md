@@ -557,7 +557,68 @@ server's side of the promise, so the pair cannot drift apart silently.
 
 - Pool of 50 (web) / 200 (Tauri) replenished on connect. Target: 20, threshold: 5.
 - Atomically consumed by inviting devices.
-- On fresh start: old OTKPs have no matching private keys -> purged via `DELETE /api/mls/devices/:userId/:deviceId/prekeys` **before** generating new ones.
+- On fresh start: old OTKPs have no matching private keys -> purged via `DELETE /api/mls/devices/:userId/:deviceId/prekeys` **before** generating new ones. `freshStart` is `!state`, so this is a NEW INSTALL and not a launch - it is not what accumulated the bundles measured below.
+- Every bundle a device mints stays in its local keystore until its 84-day lifetime elapses; see the section below for what one weighs and what bounds the pile.
+
+### What a key package WEIGHS, and the prune that bounds it
+
+Minting one writes its private bundle into the provider's storage, and until 2026-09-06 nothing ever
+deleted one. `frontend/mls-core/tests/state_weight.rs` is the measurement - IGNORED by default,
+because a number is not a pass or a fail and pinning today's bytes would only manufacture a failure
+the first time a legitimate field is added:
+
+```
+cargo test --release --test state_weight -- --ignored --nocapture
+```
+
+| what | bytes | how it was read |
+|---|---|---|
+| one-time prekey bundle | **1 936** | four rounds of 50, slope |
+| a group of one | 5 330 | four rounds of 10 - a FLOOR, no members, no history |
+| one member added to a group | ~2 000 | four rounds of 5, each from its OWN device |
+| **50 sends** | **~0** | flat after the first batch |
+
+Two things follow, and both were assumptions before. **Sends are flat, so message history is not
+what makes a blob heavy** - a device that has simply been used for months does not explain itself.
+And in a state holding 41 groups AND 200 prekeys, the prekeys are **60.1%** of it. The docblocks in
+`TauriMlsService` and `WebMlsService` that justify a pool of 50 said "each ~400 bytes"; they were
+wrong by five times, which is what made "hundreds of unused bundles" sound affordable.
+
+**The asymmetry that leaked.** `reconcilePublishedKeyPackages` purges the SERVER of a prekey whose
+private key is gone locally. Nothing asked the opposite question, so a bundle the server had stopped
+publishing was kept for ever, and two callers mint without bound: `generateKeyPackageImpl` publishes
+a fresh last-resort package on **every connection**, and `republishKeyMaterial` purges the pool and
+mints up to 50 more **once per 30 s** through a `NoMatchingKeyPackage` storm - ~97 kB orphaned each
+round. The Mi 9T came out of the 2026-09 healing campaign with a 19 548 753-byte `mls.bin`, ~200
+such rounds, a 17-second checkpoint and a 22-second unlock.
+
+**`MlsManager::prune_expired_key_packages` deletes every stored bundle whose lifetime has elapsed,
+once per load.** It hangs off `load_or_create`, and `load_with_key` delegates there, so the web
+client, the native client and the background FCM path all shed through one seam - no timer, no
+second path. A failure is logged and does not fail the load: a device that cannot shed still works,
+one that refuses to load has lost everything.
+
+**Why expiry, and not "the server no longer publishes it".** The delivery service DELETES a one-time
+prekey as it hands it out, so absence from the server is exactly what a bundle looks like when a peer
+is about to send the Welcome built on it - pruning on that signal would race a join and lose it. An
+elapsed `not_after` has no such ambiguity: openmls defaults it to 84 days, and a Welcome referencing
+an expired KeyPackage is invalid under RFC 9420. The delete is confined to what could not have been
+used anyway, needs no server round-trip and races nothing. The clock is a PARAMETER
+(`prune_key_packages_expired_at`) so `tests/prune_expired_key_packages.rs` can ask what the state
+looks like in a hundred days without asserting on a wall clock.
+
+**The prefix is an optimisation; the identity check is the safety property.** The scan first matched
+`b"KeyPackage"` and decoded - and replacing that prefix with `b""`, matching every entry in the
+state, left all four tests green, including the one asserting groups survive. The real refusal was
+`serde_json` failing to decode group state as a `KeyPackageBundle`, which is luck: serde ignores
+unknown fields. Each candidate now recomputes its own `hash_ref` and must be named by the key it is
+stored under - exact by construction, since `openmls_memory_storage` builds every key as
+`label || json(id) || version`.
+
+**What this does NOT do.** It bounds growth at (mint rate x 84 days). It does not shrink a blob whose
+bundles are younger, so the two accrual paths - reusing a still-valid last-resort package instead of
+minting one per connection, and dropping locally what `republishKeyMaterial` has just purged
+remotely - remain open in [backlog](../backlog.md).
 
 ## How the state is encoded inside the envelope (WP-ANR-1, 2026-08-11)
 

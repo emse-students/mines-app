@@ -4615,8 +4615,15 @@ processes routinely.
    consulted at load, and the burn - which is already designed, shipped and safe by
    `SenderRatchetConfiguration::new(2000, 2000)` - applied against the deficit it finds. Nothing new
    needs inventing; it needs writing.
-2. **The blob measurement above**, because it decides whether the window can be shrunk at all or
-   only survived.
+2. ~~**The blob measurement above**, because it decides whether the window can be shrunk at all or
+   only survived.~~ **TAKEN, 2026-09-06, AND IT ANSWERS "ONLY SURVIVED" FOR NOW.** The blob is
+   dominated by accumulated key package bundles at 1 936 bytes each (~60% of a state that also holds
+   41 groups), and **sends themselves cost ~0 bytes** - so no amount of message history explains the
+   window, and shrinking it is not something this device's own use can achieve. The prune added the
+   same day BOUNDS growth at 84 days but reclaims nothing younger, so the seventeen seconds stand
+   until the two accrual paths are closed. **The spent-generation record is therefore not optional
+   and not deferrable**: it is the only thing that makes the window survivable, and item 1 no longer
+   has a cheaper alternative waiting behind a measurement.
 
 **Do NOT "fix" this by awaiting the checkpoint.** That was measured and refuted in August at 1.7 s
 per send, and it would now cost seventeen. The invariant is not "the state is durable at send time"
@@ -4683,27 +4690,68 @@ the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unl
    guessable. The clock is gone and that fact is read instead; a slow login is no longer a failed
    one. Story in `CHANGELOG.md`, guards in `sessionExpiredRelease.test.ts`, validated in negative
    against two mutations. **The twelve seconds themselves are untouched, which is question 2.**
-2. **19.5 MB is the real question and it is not answered.** It has not been established what
-   dominates the blob. One candidate has a mechanism already visible in the code:
-   `generate_key_packages` writes every bundle to the provider's storage and NOTHING deletes them
-   locally. `deleteAllOneTimePrekeys()` clears the SERVER's pool, and on every fresh start the client
-   then mints 50 more - so a device that has restarted often keeps every unconsumed bundle it has
-   ever generated. `TauriMlsService`'s own docblock already worries about "bloating the Rust state
-   with hundreds of unused private key bundles (each ~400 bytes)", which is the awareness without
-   the prune. That is a HYPOTHESIS: measure bytes-per-key-package against `save_state` in a
-   `mls-core` test, then measure what a fresh device's blob weighs per group, before touching
-   anything. **A prune must not be written before the population is measured** - and note that the
-   last-resort fallback (2026-09-06) is one bundle that must now be KEPT.
+2. ~~**19.5 MB is the real question and it is not answered.**~~ **MEASURED AND BOUNDED, 2026-09-06.**
+   The hypothesis was right and the arithmetic was not: `mls-core/tests/state_weight.rs` weighs the
+   parts, and `tests/prune_expired_key_packages.rs` pins the rule that now bounds them.
+
+   | what | bytes each | note |
+   | --- | --- | --- |
+   | one-time prekey bundle | **1 936** | the docblock said ~400 - **wrong by five times** |
+   | a group of one | 5 330 | floor, no members, no history |
+   | one member added | ~2 000 | read off the slope over four rounds |
+   | **50 sends** | **~0** | flat after the first batch |
+
+   **SENDS ARE FLAT, SO MESSAGE HISTORY IS NOT THE CAUSE** - the obvious suspect, and it is
+   eliminated rather than doubted. In a state carrying 41 groups AND 200 prekeys, the prekeys are
+   **60.1%** of it. Against the phone's 19 548 753 bytes, ~40 groups account for well under 2 MB
+   even at twenty members apiece, leaving roughly **ten thousand accumulated bundles**.
+
+   **THE ACCRUAL ENGINE IS NOT THE FRESH START.** `freshStart` is `!state`, so it fires on a new
+   install and not per launch, and 200 reinstalls is not a real history. Two other callers are, and
+   both are unconditional: `generateKeyPackageImpl` publishes a BRAND-NEW last-resort package on
+   **every connection**, and `republishKeyMaterial` purges the server pool and mints up to 50 more
+   **once per 30 s** for as long as a `NoMatchingKeyPackage` storm lasts - each round orphaning the
+   previous 50 locally, ~97 kB a time. ~200 such rounds is exactly what this phone's healing
+   campaign produced, and 200 x 97 kB is the blob.
+
+   **THE ASYMMETRY IS THE DEFECT, STATED PLAINLY.** Reconciliation existed in one direction only -
+   `reconcilePublishedKeyPackages` purges the SERVER of a prekey whose private key is gone locally.
+   Nothing ever asked the opposite question, so a bundle the server had stopped publishing was kept
+   for the life of the install.
+
+   **WHY EXPIRY AND NOT "THE SERVER NO LONGER PUBLISHES IT".** The delivery service DELETES a
+   one-time prekey as it hands it out, so absence from the server is exactly what a bundle looks
+   like when a peer is about to send the Welcome built on it - pruning on that signal would race a
+   join and lose it. An elapsed `not_after` carries no such ambiguity: openmls defaults it to 84
+   days, a Welcome referencing an expired KeyPackage is invalid under RFC 9420, and so the delete
+   is confined to what could not have been used anyway. It needs no server round-trip and cannot
+   race anything, which is what makes it safe unattended.
+
+   **WHERE IT RUNS.** `MlsManager::prune_expired_key_packages`, called once from `load_or_create` -
+   and `load_with_key` delegates there, so the web client, the native client and the background FCM
+   path all shed through one seam with no second code path and no timer. The last-resort fallback is
+   kept exactly like any other package until its own lifetime elapses, which is the KEEP the old
+   text asked for. A prune failure is logged and does not fail the load: a device that cannot shed
+   still works, one that refuses to load has lost everything.
+
+   **WHAT THIS DOES AND DOES NOT CLOSE.** It bounds the leak permanently at (mint rate x 84 days),
+   which is the durable fix. It does **not** promise to shrink *this* phone's blob today - only
+   bundles past 84 days go, so the reclaim depends on the install's age. **Two things are therefore
+   still open**, and they are the accrual itself rather than its cleanup: the per-connection
+   last-resort mint should be reused while it is valid and we still hold its private key
+   (`keyPackageHasPrivate` already answers exactly that), and `republishKeyMaterial` should drop
+   locally what it has just purged remotely instead of leaving 50 orphans behind.
 
 **This is invisible to every gate in this repository.** The desktop clients carry a small state and
 the emulator never accumulates one; only a phone that has lived through a campaign shows it. It
 belongs with the other three iOS/Android defects that no green build could have caught.
 
-**WHAT REMAINS AFTER THE UI HALF WAS FIXED**: the 19.5 MB blob and the 17-second checkpoints. The
-user no longer sees a false failure, but the unlock still takes ~22 s on this handset and every
-structural checkpoint still costs 17 s of CPU. The measurement owed is the one named above - bytes
-per key package against `save_state`, then the per-group weight of a fresh device's blob - and it
-must come before any prune is written.
+**WHAT REMAINS AFTER THE UI HALF AND THE MEASUREMENT**: the unlock still takes ~22 s on this
+handset and a structural checkpoint still costs 17 s of CPU, because the prune bounds future growth
+rather than reclaiming an existing blob whose bundles have not yet reached 84 days. The two accrual
+paths named in question 2 are what would actually shrink it, and neither is written. **A field
+re-measurement of `stat mls.bin` on this handset is owed once a build carrying the prune has run on
+it** - that number, not a test, is what closes this entry.
 
 ### P2 - the MLS snapshot version is a PER-DOCUMENT counter compared ACROSS documents, so a second tab's write is dropped on a collision (measured on TAB-4, 2026-09-05)
 

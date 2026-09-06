@@ -772,8 +772,19 @@ export class WebMlsService extends BaseMlsService {
     }
 
     // Replenish the one-time prekey pool up to 50 on each connection.
-    // 50 is sufficient for normal use and avoids bloating the MLS state
-    // with hundreds of unused private key bundles (each ~400 bytes).
+    //
+    // A BUNDLE IS 1 936 BYTES, NOT THE ~400 THIS COMMENT CLAIMED UNTIL 2026-09-06 - measured by
+    // `mls-core/tests/state_weight.rs`, where 200 of them are 60% of a state that also holds 41
+    // groups. The figure mattered: it is the arithmetic the pool size of 50 was chosen against, and
+    // being wrong by five times is what made "hundreds of unused bundles" sound affordable. A
+    // device through the 2026-09 healing campaign reached a 19 548 753-byte `mls.bin` that took
+    // 17 s to checkpoint and 22 s to unlock behind the PIN.
+    //
+    // The pool size is NOT the leak and lowering it is not the fix - `republishKeyMaterial` purges
+    // the server and mints a fresh 50 once per 30 s during a `NoMatchingKeyPackage` storm, and each
+    // of those rounds orphans the previous 50 locally for ever. What bounds it is
+    // `MlsManager::prune_expired_key_packages`, which runs once per load in `load_or_create` and so
+    // covers this path, the web one and the background FCM one alike.
     const existing = await this.delivery.fetchPrekeyCount();
     const needed = Math.max(0, 50 - existing);
 

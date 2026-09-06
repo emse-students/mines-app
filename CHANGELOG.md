@@ -13,6 +13,44 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **The local MLS keystore never deleted a key package, so a phone's `mls.bin` reached 19.5 MB and
+  a single checkpoint cost seventeen seconds.** Minting a key package writes its private bundle to
+  storage, and the only reconciliation that existed ran the other way - `reconcilePublishedKeyPackages`
+  purges the SERVER of a prekey whose private key is gone locally. Nothing ever asked the opposite
+  question, so a bundle the server had stopped publishing was kept for the life of the install.
+  Two callers made that unbounded, and neither is rare: `generateKeyPackageImpl` publishes a
+  brand-new last-resort package on **every connection**, and `republishKeyMaterial` purges the
+  server pool and mints up to fifty more **once per 30 s** for as long as a `NoMatchingKeyPackage`
+  storm lasts - each round orphaning the previous fifty, about 97 kB a time.
+
+  **The arithmetic that had been assumed was wrong by five times.** Both services carried a comment
+  justifying the pool size of 50 against "each ~400 bytes"; `mls-core/tests/state_weight.rs` weighs
+  a bundle at **1 936 bytes**, and finds 200 of them to be **60%** of a state that also holds 41
+  groups. The same measurement eliminates the obvious suspect: **fifty sends cost ~0 bytes**, flat,
+  so message history is not what makes a blob heavy. Against the phone's 19 548 753 bytes that is
+  roughly ten thousand accumulated bundles - about 200 purge-and-remint rounds, which is what the
+  2026-09 healing campaign put this handset through.
+
+  `MlsManager::prune_expired_key_packages` now deletes every stored bundle whose lifetime has
+  elapsed, once per load. **Expiry is the discriminator, and "the server no longer publishes it" is
+  not**: the delivery service deletes a one-time prekey as it hands it out, so absence from the
+  server is exactly what a bundle looks like when a peer is about to send the Welcome built on it,
+  and pruning on that signal would race a join and lose it. An elapsed `not_after` cannot be
+  ambiguous - openmls defaults it to 84 days and a Welcome referencing an expired KeyPackage is
+  invalid under RFC 9420 - so the delete is confined to what could not have been used anyway, needs
+  no server round-trip, and races nothing. It hangs off `load_or_create`, which `load_with_key`
+  delegates to, so the web client, the native client and the background FCM path shed through one
+  seam with no timer and no second path.
+
+  **The prefix was not the safety property, and the tests proved it by not noticing.** Replacing
+  the `b"KeyPackage"` scan prefix with `b""` - matching every entry in the state - left all four
+  tests green, because it was the `serde_json` decode that happened to refuse group state, and
+  serde ignores unknown fields. Luck is not a safety property when the failure mode is a device that
+  still saves and loads while having silently lost every conversation, so each candidate now
+  recomputes its own `hash_ref` and must be named by the key it is stored under. This bounds growth
+  at (mint rate x 84 days); it does not shrink a blob whose bundles are younger, and the two accrual
+  paths remain open in `docs/wiki/backlog.md`.
+
 - **A message notification on Android showed who had written and not what - the body was in the
   record and on no screen.** Reported by the user as a banner naming a sender with nothing under it,
   and found by looking at the shade rather than at the code.
