@@ -2176,35 +2176,37 @@ worth knowing and is no longer evidence for anything.
 **OWED**: HEAL-REVOKE-5, -8, -2, -3 and -9 on a build carrying both fixes - all `PASS-DIRTY` on the
 `arrived twice` line alone, which is fixed. Until a release carries them this is FIXED, NOT SHIPPED.
 
-### P2 - the snapshot guard is blind on ONE path, because the version is applied after the await rather than at the capture (read 2026-09-06, NOT reproduced)
+### P3 - the LAST unserialised writer of the MLS snapshot is the key-package path, and it is the one that makes the guard log (read 2026-09-06, NOT reproduced)
 
-**The guard's whole correctness rests on WHEN the version is assigned**, and `hex.ts` says so in as
-many words: *"Tagging each snapshot with an increasing version at the synchronous capture moment ...
-prevents a slow off-thread encryption from overwriting a fresher concurrent write"*, and *"the
-version travels with the bytes via a WeakMap, so the async Argon2 step cannot reorder it"*.
+**FILED FIRST AS A P2 ABOUT A STALE CAPTURE CARRYING A FRESH VERSION, AND THAT READING WAS TOO
+STRONG - the guard I had not seen is `installUnlessOvertaken`.** The key-package WORKER takes a
+SNAPSHOT of the client state, generates off-thread, and its result is installed only if the live
+client has not moved under it (`mutationsAtSnapshot`, plus `swapClientMonotonic`'s per-group epoch
+check); a refused swap falls into the branch that regenerates on the LIVE client. So the worst case
+I described - an old capture persisted as if fresh - is not reachable through the path I claimed it
+was. **Recorded rather than quietly deleted: the entry was written from the tag site alone, without
+following what happens to the bytes, which is the mistake and not the conclusion.**
 
-**On the key-package worker path it is not assigned at the capture.** `WebMlsService`'s publication
-seam takes `stateBytesToPersist` from `workerResult.state` - captured off-thread, BEFORE an await -
-and then tags it at the write, with a comment claiming *"this synchronous save-and-write turn has no
-interleaving await"*. That claim is true of the tag-and-write turn and false of the capture-to-tag
-interval, which is the one the version is supposed to describe. The main-thread fallback in the same
-function captures and tags in one turn and is correct.
+**WHAT IS REAL AND IS THE POINT: this is the one writer that does not go through the persister.**
+Every other path does. `persistMlsStructuralCheckpoint` routes to the registered
+`MlsStatePersister`, which serialises its own flushes (`inFlightEncrypted` plus a re-run flag), so
+the persister cannot race itself and `persistMlsStateAfterMutation` inherits that. The key-package
+publication seam instead does `save_state` followed by `saveMlsState(userId, tagMlsSnapshot(...))` -
+**the exact two-call shape whose removal is already documented next door**, in `runSaveEncrypted`:
+*"ONE CALL, BECAUSE THE PLATFORM OWNS WHAT DURABLE MEANS ... this used to be `saveState` followed by
+`saveMlsStateEncrypted`, which is right on web and writes `mls.bin` TWICE on native"*. That call site
+kept its own copy of an answer that was corrected everywhere else.
 
-**THE DIRECTION MATTERS AND IT IS THE UNSAFE ONE.** A capture that is OLD gets a version that is
-NEW, so the guard - which only refuses a version that is not strictly newer - ACCEPTS it and a
-fresher persisted state is overwritten. That is precisely the regression the version exists to
-prevent, and the guard cannot see it: every log line this mechanism produces is about the SAFE
-direction (an old version arriving late, correctly dropped).
+**AND IT EXPLAINS THE MEASUREMENT EXACTLY.** Key-package publication happens ONCE per connection,
+which is why the drop is once per mint and off by exactly one rather than a storm: two writers, one
+of them serialised, meeting once. The entry below is the noise; this is its second call site.
 
-**NOT REPRODUCED, AND THAT IS THE state of it.** This is read off the code, not measured: it needs
-the worker path taken (key packages actually generated off-thread) concurrently with another
-mutation persisting. Nothing observed a regression, and nothing would have - a silently older
-persisted snapshot shows up later as a device that cannot decrypt, which is a symptom this campaign
-has other explanations for. **Before fixing it, settle whether the worker holds its OWN MLS client**:
-if it does, `workerResult.state` is a different client's state and the question is larger than a tag
-site. The cheap and probably right fix is to stop persisting the worker's snapshot at all and
-capture on the main thread after it returns - fresher AND correctly ordered - but that is a change
-to the persistence path and wants a measurement first.
+**THE FIX IS TO DELETE THE OVERLAP, NOT TO ORDER IT**: route this write through
+`persistMlsStructuralCheckpoint()` like everything else, which also gives it the durability the
+publication actually needs (the private halves of the key packages must be on disk BEFORE they are
+published). It is not done here because it touches the client's persistence path and the only thing
+that can say it is safe is a run of the HEAL rung, which is what this session spent its measurements
+on. **Nothing observed a loss, and the guard's every line is about the safe direction.**
 
 ### P3 - three writers persist one MLS document and the guard between them logs on every mass join (measured 2026-09-06)
 
@@ -2221,12 +2223,13 @@ persister), `persistMlsStateAfterMutation`, and the key-package publication path
 write; a device performing a mass join runs all three within seconds of each other, and two captures
 in flight at once is what the version compares.
 
-**IT IS DETERMINISTIC, ONCE PER MINT, AND OFF BY EXACTLY ONE.** Measured across HEAL-REVOKE-5, -8 and
--2 on 2026-09-06: `v110 < v111`, `v133 < v134`, `v134 < v135` - one occurrence on the observer that
-MINTS a device, every run, and none on the victim or the actor. **Off by one means exactly TWO
-captures in flight, adjacent**, not a storm - so this is one identifiable pair of call sites rather
-than general contention, and whoever fixes it should be able to name both. A defect that reproduces
-on every run is not a race to be lived with; it is an ordering waiting to be read.
+**IT IS OFF BY EXACTLY ONE, AND IT MISSES SOME RUNS.** Measured across four runs on 2026-09-06:
+`v110 < v111` (HEAL-REVOKE-5), `v133 < v134` (-8), `v134 < v135` (-2), and **nothing at all on -3**,
+which is `PASS` with all four observers clean. So it is a race and not a fixed sequence - three runs
+in four, always exactly ONE occurrence, always on an observer that MINTS a device, never on the
+victim or the actor. **Off by one means exactly TWO captures in flight and adjacent**, not a storm,
+which is why the pair of call sites can be named rather than hunted: the persister serialises itself,
+so the other one is the writer that does not go through it (the entry above).
 
 **SERIALISING THE WRITES WOULD BE WRONG, and that is why this is filed rather than fixed.** Chaining
 them makes the OLDER capture land first and be overwritten - two writes where one is needed, and a
