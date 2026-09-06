@@ -11,6 +11,28 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every web login was refused with "PIN incorrect" in v0.16.4, and the PIN was right.** The prune
+  added in #392 runs once per `load_or_create` and reads the clock with
+  `std::time::SystemTime::now()`. `mls-core` also compiles to `wasm32-unknown-unknown`, where that
+  call is not implemented and **panics** rather than returning an error - so MLS init unwound on
+  every browser login, and the login path reported the failure as `auth_pin_mismatch`: a correct PIN
+  refused, for every user, account-wide.
+
+  The `match` around the prune was written to keep a maintenance failure from failing the load, and
+  it could not help: **a panic is not an `Err`.** The clock was already a parameter on the function
+  that does the work (`prune_key_packages_expired_at`) precisely so the decision could be tested
+  without one; the mistake was the convenience wrapper that reads a clock, in a crate that targets
+  wasm. It is now `#[cfg(not(target_arch = "wasm32"))]`, along with its call site.
+
+  Native keeps the prune, which is where it was needed - the 2 338 accumulated bundles were measured
+  on a handset, and no browser profile lives long enough to reach an 84-day horizon. When the web
+  wants it, the caller passes `Date.now()/1000` to the function that takes a clock.
+
+  **Verified on the artefact rather than the source**: `time not implemented on this platform` is a
+  literal in `mls_wasm_bg.wasm` built without this change and absent from the same build with it.
+
 ### Added
 
 - **A device can now say what its persisted state is MADE OF, in one line at load.** `mls.bin` has

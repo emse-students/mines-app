@@ -349,6 +349,20 @@ impl MlsManager {
             // shed old bundles still works, where a device that refuses to load has lost
             // everything. It is logged at a level that accuses, because a prune that never succeeds
             // is the leak coming back and nothing else would say so.
+            // AND NOT ON THE WEB, BECAUSE THE GUARD ABOVE CANNOT HOLD THERE. This crate compiles to
+            // `wasm32-unknown-unknown`, where `std::time::SystemTime::now()` is not implemented and
+            // does not return an error - it PANICS. A panic is not an `Err`, so the `match` below
+            // never saw it: `load_or_create` unwound, MLS init failed for every web user on every
+            // login, and the login path reported it as `auth_pin_mismatch` - a correct PIN refused,
+            // account-wide, in v0.16.4. The clock is a parameter on the function that does the work
+            // for exactly this reason; the convenience wrapper that reads a clock is the part that
+            // has no business in a crate targeting wasm.
+            //
+            // Native only is not a compromise here: the 2 338 accumulated bundles that motivated
+            // this were measured on a handset, and a browser profile does not live long enough to
+            // reach the horizon. When the web needs it, the caller passes `Date.now()/1000` to
+            // `prune_key_packages_expired_at` - no clock inside this crate, on any target.
+            #[cfg(not(target_arch = "wasm32"))]
             match manager.prune_expired_key_packages() {
                 Ok(0) => {}
                 Ok(n) => log::info!("load_or_create: pruned {} expired key package(s)", n),
@@ -558,6 +572,13 @@ impl MlsManager {
     ///
     /// Reads the clock ONCE and hands it to [`Self::prune_key_packages_expired_at`], which is where
     /// the decision actually lives - see there for why the two are separate.
+    ///
+    /// **NOT COMPILED FOR wasm32**, and the `cfg` is the fix rather than a limitation. `std`'s clock
+    /// is unimplemented there and PANICS instead of erroring, which took down every web login in
+    /// v0.16.4; a target that cannot read a clock must not be offered a function that reads one.
+    /// Callers on wasm have a clock of their own and pass it to
+    /// [`Self::prune_key_packages_expired_at`].
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn prune_expired_key_packages(&self) -> Result<usize, MlsError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
