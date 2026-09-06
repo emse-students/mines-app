@@ -63,18 +63,89 @@ else holds, a console owned by the user, or hardware that does not exist.
 | What | Kind | Where the substance is |
 | --- | --- | --- |
 | ~~UNLOCK THE CAMPAIGN PHONE~~ **DONE 2026-09-05** (`deviceLocked=0`, measured). What remains is OPTIONAL and the user asked for it: removing the pattern needs the credential, so either they clear it in Settings or it joins `test-accounts.json` like every other one. Retiring the lock costs no key material - both keystore keys are explicitly `setUserAuthenticationRequired(false)`, measured before proposing it | 1 gesture on the device | [P2 - every silent push on the phone fails to decrypt](#p1---a-backgrounded-phone-is-never-told-about-a-message-it-has-already-received-because-the-js-layer-waits-for-a-push-the-server-never-sends-measured-on-device-2026-09-05) |
-| choose how production says it is down - the probe must hit `/api/version`, which needs the database | decision, then ~1 click | [P2 - nothing tells anybody production is down](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click) |
+| set up the external uptime probe that mails - **decided 2026-09-06, mail**; the probe must hit `/api/version` AND `/api/chat-delivery-health`, never the homepage, which answered 200 through both outages | ~1 click in Cloudflare or an uptime service | [P2 - NOTHING TELLS ANYBODY PRODUCTION IS DOWN](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click) |
 | should a dev-ONLY trigger exist - today one push deploys both estates and a broken dev BLOCKS production, by design | decision | [dev.canari-emse.fr becomes a real second environment](#devcanari-emsefr-becomes-a-real-second-environment---decided-2026-08-17) |
 | a fine-grained PAT from an account WITH PUSH ACCESS - the App token was measured refused, ten times | decision | [P1 - no identity CI can mint may ask Dependabot to rebuild a branch](#p1---no-identity-ci-can-mint-may-ask-dependabot-to-rebuild-a-branch-so-a-moved-gate-parks-the-whole-queue---and-the-app-token-was-the-recommendation-this-row-itself-made-measured-2026-09-03) |
 | PostgreSQL 15 -> 18, parked by the user (*"on verra ca plus tard"*); its test also releases `redis` and `garage` | decision | [P2 - PostgreSQL is held at 15](#p2---postgresql-is-held-at-15-because-18-needs-a-migration-nobody-has-performed-after-the-outage-of-2026-09-01) |
 | is a MiGallery application worth building | decision | [post-campaign projects](#post-campaign-projects---decided-not-scheduled) |
-| how `frontend/src-tauri` gets its cargo updates - Dependabot cannot parse it and the fix that would let it is verified only by an Android AND an iOS build | decision | [P1 - two of the six cargo directories are invisible to Dependabot](#p1---two-of-the-six-cargo-directories-are-invisible-to-dependabot-and-one-of-them-is-the-app-that-ships-to-phones-measured-2026-09-02) |
 | rotate `CF_DNS_TOKEN` **and** the cloudflared tunnel run token - both reached a transcript on 2026-09-01 | rotation | agent memory names both; neither may enter this repo |
 | put the BDE 170 EUR tier on sale - an allowlist correctly withholds it and no event will ever fire | 1 click | the verification table above |
 | App Store Connect: the 2.3.6 radio button | 1 click | [mobile](frontend/mobile.md#where-the-submission-stands-and-what-each-half-is-waiting-on) |
 | Lydia's credentials, which Lydia owes | blocked upstream | WP-LYDIA-1 |
 | an Android phone and an iPhone - unblocks the whole verification table above and the campaign | hardware | [device-verification](device-verification.md) |
 | copy `canari-harness/` to the second machine to resume the campaign; **SETUP-4's 2FA is no longer owed**, the test accounts carry no MFA | 1 copy | [cross-client-campaign-resume](cross-client-campaign-resume.md) |
+
+## FOUR DECISIONS TAKEN BY THE USER, 2026-09-06
+
+Asked and answered in one pass, so none of them is waiting any more. Each names what it now costs
+somebody to DO, which is the only part that was ever the user's.
+
+### Production says it is down BY MAIL - decided 2026-09-06
+
+**The entry that carries this is above and is unchanged**
+([P2 - NOTHING TELLS ANYBODY PRODUCTION IS DOWN](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click));
+this records only the answer. **A first draft of this block claimed that entry had gone missing from
+the file and rewrote it from scratch - it had not, the heading is upper-case and a case-sensitive
+grep missed it.** Recorded because a session that invents a replacement for a page it failed to find
+is a worse failure than the one it thinks it is fixing.
+
+**THE ENTRY'S OWN ANALYSIS DECIDES WHERE THE PROBE LIVES, AND IT IS NOT HERE.** It says the cheapest
+honest option is an external probe on `/api/version` and `/api/chat-delivery-health` - Cloudflare
+already fronts all three zones and can do it, or any uptime service - and that *"building a poller in
+this repository to replace them would be exactly the waste that rule names"* (one-off actions go to
+the user). Mail is what such a service sends. So the decision does not turn into code here, and the
+click stays the user's.
+
+**Both paths must be probed and neither may be the homepage.** `frontendDist` is embedded, so nginx
+served **200** throughout both outages while `auth_db` was unreachable: an external check reading the
+homepage would have reported a healthy site for 33 minutes. `/api/version` needs the database.
+
+**AND MAIL WAS REFUSED ONCE ALREADY, ON `mitv`, which has to be said or this reads as a reversal.**
+There, `MAILADDR` would have delivered into a spool nobody opens, on a host with postfix and exim4
+both inactive and `monit` holding no destination - *a check that cannot reach its reader reports
+health*. An uptime service is a different sender entirely: a real MTA, a mailbox the user reads, and
+above all **not on the box that is down**, which is the requirement no probe hosted on `canari` or
+`mitv` could ever have met.
+
+**What IS code, and is owed whichever service is chosen** - the entry already names it: CD's
+`Health Check` and `Wait for services to be healthy` run AFTER the migration step, so a deploy that
+fails on migrations never reaches them and reports only *"migrations failed"* - true, and silent
+about the estate being down.
+
+### ONE relay-path call, by hand, and no CALL runner
+
+**Decided 2026-09-06.** The SFU's P1 says what closes it in as many words - *"what settles it is one
+call, and only one call"* - so that is what will be taken: two peers, audio and video, over the
+relay path with TURN configured as production configures it. `CALLS_ENABLED` is flipped in the LOCAL
+tree only and put back; the five switches that move together at a real revival are untouched.
+
+**The twenty CALL rows stay NEVER RUN, deliberately.** They are the largest block of unwritten
+campaign left, and the user's ranking has not changed since 2026-09-01: *"les appels video et audio
+ne sont pas la priorite"*. So the campaign cannot be called finished, and that is an honest state
+rather than a gap - the row that matters to a SHIPPED build is the one being taken by hand.
+
+### `frontend/src-tauri` stays declared, and gets a trigger with a name
+
+**Decided 2026-09-06.** Not option 1 (`links` removed): it plausibly drops the plugin's native half,
+which COMPILES and fails at runtime on a phone - the exact class of all three iOS defects - and only
+an Android AND an iOS build could clear it, while this workstation can never produce the second. Not
+option 2 either: an unmanaged mobile artefact is the opposite of *"un projet qui peut vivre tout
+seul"*.
+
+So option 3, and the half that makes it real is the trigger: a scheduled job running
+`cargo update --dry-run` in `frontend/src-tauri` and OPENING AN ISSUE when the tree is behind.
+"Somebody remembers" is not a mechanism. The gate that stops the two directories being forgotten
+already exists (`dependabot-cargo-reach.test.sh`); what is added is the thing that notices the
+updates nobody can open a pull request for.
+
+### The phone works the notification P1 first
+
+**Decided 2026-09-06.** Ahead of writing the NOTIF rung, ahead of HEAL-A1, and ahead of the
+community-notification P2: the measurement that closes a P1 already fixed in the tree beats the
+runner that would let a new one be found. Checks K and K2 and NOTIF-6b ride with it - all three have
+their procedures written and all three need the same backgrounded phone.
+
+---
 
 **Firebase owes nothing** (asked 2026-09-02): dev reuses the existing `fr.emse.canari` app, and the
 `DEV_*` push secrets are disposition `warn`, so their absence has never blocked a deploy - the fact
