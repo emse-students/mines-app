@@ -2176,6 +2176,36 @@ worth knowing and is no longer evidence for anything.
 **OWED**: HEAL-REVOKE-5, -8, -2, -3 and -9 on a build carrying both fixes - all `PASS-DIRTY` on the
 `arrived twice` line alone, which is fixed. Until a release carries them this is FIXED, NOT SHIPPED.
 
+### P2 - the snapshot guard is blind on ONE path, because the version is applied after the await rather than at the capture (read 2026-09-06, NOT reproduced)
+
+**The guard's whole correctness rests on WHEN the version is assigned**, and `hex.ts` says so in as
+many words: *"Tagging each snapshot with an increasing version at the synchronous capture moment ...
+prevents a slow off-thread encryption from overwriting a fresher concurrent write"*, and *"the
+version travels with the bytes via a WeakMap, so the async Argon2 step cannot reorder it"*.
+
+**On the key-package worker path it is not assigned at the capture.** `WebMlsService`'s publication
+seam takes `stateBytesToPersist` from `workerResult.state` - captured off-thread, BEFORE an await -
+and then tags it at the write, with a comment claiming *"this synchronous save-and-write turn has no
+interleaving await"*. That claim is true of the tag-and-write turn and false of the capture-to-tag
+interval, which is the one the version is supposed to describe. The main-thread fallback in the same
+function captures and tags in one turn and is correct.
+
+**THE DIRECTION MATTERS AND IT IS THE UNSAFE ONE.** A capture that is OLD gets a version that is
+NEW, so the guard - which only refuses a version that is not strictly newer - ACCEPTS it and a
+fresher persisted state is overwritten. That is precisely the regression the version exists to
+prevent, and the guard cannot see it: every log line this mechanism produces is about the SAFE
+direction (an old version arriving late, correctly dropped).
+
+**NOT REPRODUCED, AND THAT IS THE state of it.** This is read off the code, not measured: it needs
+the worker path taken (key packages actually generated off-thread) concurrently with another
+mutation persisting. Nothing observed a regression, and nothing would have - a silently older
+persisted snapshot shows up later as a device that cannot decrypt, which is a symptom this campaign
+has other explanations for. **Before fixing it, settle whether the worker holds its OWN MLS client**:
+if it does, `workerResult.state` is a different client's state and the question is larger than a tag
+site. The cheap and probably right fix is to stop persisting the worker's snapshot at all and
+capture on the main thread after it returns - fresher AND correctly ordered - but that is a change
+to the persistence path and wants a measurement first.
+
 ### P3 - three writers persist one MLS document and the guard between them logs on every mass join (measured 2026-09-06)
 
 **The line is `[MLS] Skipping stale MLS state write (v110 < stored v111)`, and it is the guard
@@ -2189,8 +2219,14 @@ write of the newer one costs one missed checkpoint rather than a regression.
 **WHAT IT IS THE VISIBLE END OF IS THREE WRITERS ON ONE DOCUMENT.** `persistNow` (the state
 persister), `persistMlsStateAfterMutation`, and the key-package publication path all capture and
 write; a device performing a mass join runs all three within seconds of each other, and two captures
-in flight at once is what the version compares. Measured on HEAL-REVOKE-5, 2026-09-06: exactly ONE
-occurrence on each of the two observers that MINT a device, none on the victim or the actor.
+in flight at once is what the version compares.
+
+**IT IS DETERMINISTIC, ONCE PER MINT, AND OFF BY EXACTLY ONE.** Measured across HEAL-REVOKE-5, -8 and
+-2 on 2026-09-06: `v110 < v111`, `v133 < v134`, `v134 < v135` - one occurrence on the observer that
+MINTS a device, every run, and none on the victim or the actor. **Off by one means exactly TWO
+captures in flight, adjacent**, not a storm - so this is one identifiable pair of call sites rather
+than general contention, and whoever fixes it should be able to name both. A defect that reproduces
+on every run is not a race to be lived with; it is an ordering waiting to be read.
 
 **SERIALISING THE WRITES WOULD BE WRONG, and that is why this is filed rather than fixed.** Chaining
 them makes the OLDER capture land first and be overwritten - two writes where one is needed, and a
