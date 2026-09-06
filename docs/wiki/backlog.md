@@ -2176,6 +2176,38 @@ worth knowing and is no longer evidence for anything.
 **OWED**: HEAL-REVOKE-5, -8, -2, -3 and -9 on a build carrying both fixes - all `PASS-DIRTY` on the
 `arrived twice` line alone, which is fixed. Until a release carries them this is FIXED, NOT SHIPPED.
 
+### P3 - three writers persist one MLS document and the guard between them logs on every mass join (measured 2026-09-06)
+
+**The line is `[MLS] Skipping stale MLS state write (v110 < stored v111)`, and it is the guard
+WORKING.** Snapshots are tagged with a monotonic version at the SYNCHRONOUS capture moment, on
+purpose - *"the version travels with the bytes via a WeakMap, so the async Argon2 step cannot
+reorder it"* - and the MLS client is epoch-monotonic, so a snapshot captured later never reflects a
+staler state than one captured earlier. An earlier capture whose write lands after a later one's is
+therefore correctly dropped, and the fresher state is what stays. **Nothing is lost**, and a failed
+write of the newer one costs one missed checkpoint rather than a regression.
+
+**WHAT IT IS THE VISIBLE END OF IS THREE WRITERS ON ONE DOCUMENT.** `persistNow` (the state
+persister), `persistMlsStateAfterMutation`, and the key-package publication path all capture and
+write; a device performing a mass join runs all three within seconds of each other, and two captures
+in flight at once is what the version compares. Measured on HEAL-REVOKE-5, 2026-09-06: exactly ONE
+occurrence on each of the two observers that MINT a device, none on the victim or the actor.
+
+**SERIALISING THE WRITES WOULD BE WRONG, and that is why this is filed rather than fixed.** Chaining
+them makes the OLDER capture land first and be overwritten - two writes where one is needed, and a
+window in which the persisted state is the staler one. Assigning the version inside the chain
+instead would change what the tag means: it is a capture order, and the guard's whole correctness
+rests on that. The fix that would remove the line is to have ONE seam capture and persist, which is
+a change to the most safety-critical path in the client and wants its own session.
+
+**IT IS NOT FORGIVEN ON THE ROW.** The only expected-noise list that covers a freshly minted device
+is `FRESH_CLIENT_NARRATION`, shared by every runner, so adding the needle there is a CLASSIFIER
+rather than a per-row disposition - which is precisely what the HEAL rung's own note warns against.
+HEAL-REVOKE-5 therefore reports `PASS-DIRTY` honestly.
+
+**Read with the P2 next to it in `hex.ts`**: the `version === stored` case is a DIFFERENT event - two
+tabs seeding from the same stored value - and whether dropping the second tab's write can lose state
+is still open. This entry is about `version < stored` only.
+
 ### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
 
 The row makes a group unknown by restoring an MLS blob that predates the join. On `60432d09` the
