@@ -30,7 +30,7 @@ One GESTURE each, or the vocabulary a gesture is built from. An atom ends on a f
 | `cdp.mjs` | Dependency-free Chrome DevTools Protocol driver for the cross-client test campaign |
 | `chat.mjs` | Chat primitives shared by every check in the campaign. |
 | `checks.mjs` | THE MANIFEST: which script covers which phase, and what each phase needs to be meaningful. |
-| `cleanup.mjs` | Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on production. |
+| `cleanup.mjs` | Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on THE ESTATE |
 | `comm.mjs` | The vocabulary the COMM phase is written in: communities, channels, invitations, roles. |
 | `debris.mjs` | THE ONE ALLOWLIST OF THROWAWAY GROUP NAMES, shared by every sweep that may delete one. |
 | `deploy.mjs` | WAS PRODUCTION REDEPLOYED WHILE THE CHECK WAS RUNNING? - the one cause of transport failure that |

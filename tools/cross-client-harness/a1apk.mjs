@@ -110,8 +110,8 @@ function authentikEnv() {
  * to reuse cannot have its work at module scope - the rule the four other dual-purpose files in
  * this directory already follow with the same `pathToFileURL` guard.
  */
-export async function armA1({ build = true, reverseOnly = false } = {}) {
-  // BINDS A1 ITSELF, because this atom is NAMED for it and therefore knows the answer.
+export async function armA1({ build = true, reverseOnly = false, device = 'A1' } = {}) {
+  // BINDS THE NAMED PHONE ITSELF, defaulting to the one this atom is named for.
   //
   // With two phones attached, `serial()` refuses rather than choosing - correctly, and it says so:
   // "pass --device to an atom so it can call useDevice()". This file was that atom and did not,
@@ -121,7 +121,14 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
   //
   // `useDevice` sets `ANDROID_SERIAL` in this process, so it also reaches the `adb` and `tauri`
   // children spawned below - the binding is the whole subtree's, not this module's.
-  useDevice('A1');
+  //
+  // `--device` exists because the APK is not A1's: it is the LOCAL-ESTATE build, and any phone on
+  // the bench may need it. The file keeps its name because eight places reference it and a rename
+  // buys nothing; `[A1]` in the log below is the DEVICE, so a line always says which phone it is
+  // about. Arming a second phone is `bun a1apk.mjs --no-build --device A2` - the build is shared,
+  // and rebuilding it per phone would only risk two of them differing.
+  useDevice(device);
+  const TAG = device;
 
   // ── the reverse, which is the whole of what a replug costs ──────────────────────────────────────
   function reverse(port) {
@@ -132,7 +139,7 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
     // talking to nothing, which reads exactly like a server fault.
     const listed = adb(['reverse', '--list']);
     const ok = listed.includes(`tcp:${port}`);
-    console.log(`[A1] reverse tcp:${port} on ${dev}: ${ok ? 'up' : 'NOT LISTED'}`);
+    console.log(`[${TAG}] reverse tcp:${port} on ${dev}: ${ok ? 'up' : 'NOT LISTED'}`);
     if (!ok) throw new Error(`adb reverse --list does not show tcp:${port}:\n${listed}`);
     return dev;
   }
@@ -145,9 +152,9 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
 
   const dev = reverse(PORT);
   const { sdk, ndk, ndkVersion } = toolchain();
-  console.log(`[A1] SDK ${sdk}`);
-  console.log(`[A1] NDK ${ndkVersion} (discovered, not named)`);
-  console.log(`[A1] target origin ${SITE} - the same string on both sides of the reverse`);
+  console.log(`[${TAG}] SDK ${sdk}`);
+  console.log(`[${TAG}] NDK ${ndkVersion} (discovered, not named)`);
+  console.log(`[${TAG}] target origin ${SITE} - the same string on both sides of the reverse`);
 
   const APK = join(
     FRONTEND,
@@ -195,8 +202,8 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
     const logDir = join(STATE_DIR, 'logs');
     mkdirSync(logDir, { recursive: true });
     const logFile = join(logDir, `a1apk-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
-    console.log(`[A1] building (debug) - output to ${logFile}`);
-    console.log(`[A1]   NOT piped: this build buffers until exit, so a pipe loses all progress.`);
+    console.log(`[${TAG}] building (debug) - output to ${logFile}`);
+    console.log(`[${TAG}]   NOT piped: this build buffers until exit, so a pipe loses all progress.`);
 
     // `stdio: inherit` for the same reason the README gives: piping it hides every line until the
     // process ends, and a stalled build then looks identical to a slow one.
@@ -228,7 +235,7 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
     const hits = existsSync(chunks)
       ? readdirSync(chunks).filter((f) => f.endsWith('.js') && readFileSync(join(chunks, f), 'utf8').includes(SITE))
       : [];
-    console.log(`[A1] ${SITE} appears in ${hits.length} packaged chunk(s)`);
+    console.log(`[${TAG}] ${SITE} appears in ${hits.length} packaged chunk(s)`);
     if (!hits.length) {
       throw new Error(
         `the built bundle does not mention ${SITE} - Vite did not take the VITE_*_URL from the ` +
@@ -238,18 +245,18 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
   }
 
   // ── install, and NEVER uninstall ────────────────────────────────────────────────────────────────
-  console.log(`[A1] installing ${APK}`);
+  console.log(`[${TAG}] installing ${APK}`);
   const before = adb(['shell', 'dumpsys', 'package', PKG]);
   const verOf = (dump) => /versionName=(\S+)/.exec(dump)?.[1] ?? '(none)';
   const codeOf = (dump) => /versionCode=(\d+)/.exec(dump)?.[1] ?? '(none)';
-  console.log(`[A1] installed before: ${verOf(before)} (code ${codeOf(before)})`);
+  console.log(`[${TAG}] installed before: ${verOf(before)} (code ${codeOf(before)})`);
 
   const install = spawnSync('adb', ['-s', dev, 'install', '-r', APK], {
     encoding: 'utf8',
     timeout: 10 * 60_000,
   });
   const said = `${install.stdout ?? ''}${install.stderr ?? ''}`.trim();
-  console.log(`[A1] ${said.split('\n').slice(-3).join(' | ')}`);
+  console.log(`[${TAG}] ${said.split('\n').slice(-3).join(' | ')}`);
   if (install.status !== 0 || /Failure|INSTALL_FAILED/i.test(said)) {
     throw new Error(
       `install -r failed. A signature mismatch means the APK is a RELEASE build; build debug rather ` +
@@ -258,12 +265,12 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
   }
 
   const after = adb(['shell', 'dumpsys', 'package', PKG]);
-  console.log(`[A1] installed after : ${verOf(after)} (code ${codeOf(after)})`);
+  console.log(`[${TAG}] installed after : ${verOf(after)} (code ${codeOf(after)})`);
 
   // The reverse survives an install but not a replug, so it is re-asserted here rather than assumed:
   // this is the last moment at which a caller can be told the phone cannot reach the estate.
   reverse(PORT);
-  console.log(`[A1] done - the app still has to be launched and unlocked (pin.mjs --device A1)`);
+  console.log(`[${TAG}] done - the app still has to be launched and unlocked (pin.mjs --device ${TAG})`);
   if (build) {
     // THE ESTATE'S SOURCE ARTEFACT IS NOW THE WRONG SHAPE, and nothing downstream would say so.
     // `beforeBuildCommand` is `bun run build`, which writes the SAME `frontend/build` the local
@@ -272,7 +279,7 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
     // builds racing over that directory; this is the other half, which is that the loser is left
     // behind on disk looking perfectly fine.
     console.log(
-      `[A1] NOTE: frontend/build now holds the TAURI (adapter-static) shape. Run \`make ` +
+      `[${TAG}] NOTE: frontend/build now holds the TAURI (adapter-static) shape. Run \`make ` +
         `local-frontend\` before rebuilding the estate's frontend images.`
     );
   }
@@ -280,9 +287,16 @@ export async function armA1({ build = true, reverseOnly = false } = {}) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const argv = process.argv.slice(2);
-  armA1({ build: !argv.includes('--no-build'), reverseOnly: argv.includes('--reverse') }).catch(
+  const at = argv.indexOf('--device');
+  const device = at >= 0 ? argv[at + 1] : 'A1';
+  if (at >= 0 && !device) throw new Error('--device needs a name, as names.mjs spells it (A1, A2)');
+  armA1({
+    build: !argv.includes('--no-build'),
+    reverseOnly: argv.includes('--reverse'),
+    device,
+  }).catch(
     (e) => {
-      console.error(`[A1] ${String(e.message || e)}`);
+      console.error(`[${device}] ${String(e.message || e)}`);
       process.exit(1);
     }
   );
