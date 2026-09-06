@@ -2119,6 +2119,29 @@ both fixed, and neither moved the number - and it was that second failure to mov
 reading off the client and onto the gateway, where the "300 s" turned out to be the instrument's own
 budget. **A number reproduced four times looked like a product constant and was a harness's.**
 
+### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
+
+The row makes a group unknown by restoring an MLS blob that predates the join. On `60432d09` the
+restore is immediately undone: `digest after restore` and `digest after reload` differ, which is
+exactly the discriminator the runner already carries - **the live app checkpointed its in-memory
+state back over the restored blob before the reload**. `brokeForReal: false`, so it records
+`SETUP-FAILED` and asserts nothing downstream. That refusal is correct and is not the work.
+
+**THE WORK IS ARRANGING FOR NOTHING TO BE EXECUTING BETWEEN THE RESTORE AND THE LOAD**, and the two
+obvious ways do not survive contact:
+
+- park the page on `about:blank` first - the origin changes, so `mlsdb.mjs` can no longer reach the
+  `localhost:8081` IndexedDB it has to write;
+- `Emulation.setScriptExecutionDisabled` - freezes the page's own scripts, but the restore tool
+  drives the same page through `Runtime.evaluate`, which it would also be freezing.
+
+A same-origin document that boots no app (a static text path) is the shape that satisfies both
+constraints, and whether IndexedDB is scriptable from one is the thing to measure before writing it.
+
+**AND A SECOND, INDEPENDENT GAP IN THE SAME ROW**: `markerReason: UNRESOLVED GROUP ID` - the runner
+could not map the group NAME to its uuid, so the awaiting-history marker could not be read for the
+group under test even if the break had taken. Two fixes, not one, and neither is the app.
+
 ### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
 
 `HEAL-NEW-11`, `-12` and `-15` were written for a product where a fresh device sat AMBER until some
