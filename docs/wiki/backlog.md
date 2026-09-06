@@ -4707,6 +4707,27 @@ neither the service nor FCM exists. **Check K stays unmeasurable in the backgrou
 is decided**, and `archive/k.mjs` records `SKIPPED` rather than `FAIL` when no reply is made, so a
 run cannot be mistaken for a product verdict.
 
+### P3 - the verdict vocabulary lives in two files and is enforced by neither, so a runner inventing a word makes the reconciler wrong about the board (2026-09-06)
+
+`results.mjs` decides what a check may record; `rows.mjs` carries its own `CLAIM` map to read those
+words back off the board. Nothing ties them together, so a runner that records a verdict the map
+does not list makes `rows.mjs` report `board: unstated` for a row the board states in full - which
+is a false accusation in the one report whose whole job is to be right about the board.
+
+**It has now happened twice, and the second time the warning was already written above the bug.**
+`INCONCLUSIVE` was missing and PIN-11, the first row to record one, read as unstated; a comment was
+added at that spot saying exactly why this must not recur. On 2026-09-06 `SETUP-FAILED` - which
+`heal-w2.mjs` has recorded since it was written - did the same thing to HEAL-W2. A comment is not a
+mechanism, and a vocabulary shared by two files and owned by neither drifts the moment a runner
+invents a word.
+
+**The fix is ownership, not another entry in the map.** `results.mjs` is where a verdict comes into
+existence, so it should EXPORT the list, and `rows.mjs` should import it - then a new verdict is
+readable by both sides or by neither, and the failure is a missing import rather than a silent
+misreading. A self-test asserting that every verdict `results.mjs` can produce is recognised by
+`rows.mjs` would pin it, and belongs with the other harness self-tests. `SETUP-FAILED` is added to
+the map meanwhile so the board reconciles today.
+
 ### P1 - THE DEVICE PURGES 49 OF THE 50 PREKEYS IT HAS JUST PUBLISHED, SO THE POOL NEVER FILLS AND IT MINTS FIFTY MORE ON EVERY CONNECTION (measured on the Mi 9T, 2026-09-06 evening)
 
 **This is the engine under the 19.5 MB blob, and it was invisible until somebody counted the log
