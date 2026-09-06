@@ -46,232 +46,35 @@ Grouped by what they protect, and ordered inside each group by how expensive the
 
 ### What a verdict may rest on
 
-**A COUNT IN A CLIENT LOG IS A CLIENT'S BELIEF, AND THE SERVER KEEPS THE FACT - ASK IT BEFORE
-CONCLUDING.** On 2026-09-06 a phone's logcat showed `needed=49` on every connection and
-`purged 49/50 orphaned prekey(s)` right after each top-up. That reads as one closed loop - the
-reconciliation undoing its own refill so the pool can never fill - and it is a coherent story, an
-arithmetic that checks out, and **wrong**. The delivery service's own log and one `GROUP BY` over
-`one_time_key_package` said what really happened: 148 prekeys inserted, 49 pruned, 1 remaining, so
-**98 were claimed by peers** at about one a second, because the preflight for that very run had
-listed ~25 leftover test groups still owed a delete. Claims were emptying the pool, not the purge.
+**A MEASUREMENT TAKEN ON A DIRTY ESTATE CANNOT SEPARATE THE MECHANISM FROM THE DEBRIS - SWEEP, THEN
+RE-MEASURE.** On 2026-09-06 one defect was read three times and the first two readings were wrong,
+in ways that each looked like rigour.
 
-What survived contact with the server was smaller and sharper than the story: the device disowned 49
-prekeys **thirty-one seconds after publishing them** (`REGISTER_PREKEYS count=49` at 18:15:44,
-`PRUNE_PREKEYS deleted=49` at 18:16:15), which no amount of claim traffic explains. **The
-generalisation is not "logs lie".** It is that a client's `needed=N` is a subtraction over a number
-it fetched, so it reports the pool's LEVEL and can say nothing about the flow that set it - and a
-level is consistent with many flows. Where two mechanisms could produce the same number, the reading
-is a hypothesis until the side that keeps the ledger is asked, and here that cost two commands. The
-same trap as the campaign's own rule about a rate: a name believed before it is measured against the
-population it runs on.
+*One, from the client log:* `needed=49` on every connection and `purged 49/50 orphaned` right after
+each top-up. A closed loop - the reconciliation undoing its own refill.
 
+*Two, after asking the server:* 148 prekeys inserted, 49 pruned, 1 remaining, so **98 had been
+claimed by peers** at about one a second. That is a fact, it came from the side that holds the
+ledger, and it appeared to demote the purge to a bit part. The entry was rewritten around it.
 
-#### 1. A verdict must never be computed over a projection of its own evidence
+*Three, after `cleanup.mjs`:* the estate was carrying **42 live throwaway groups** a crashed check
+had left behind, and every reconnection re-entered all of them. Those claims were DEBRIS. Swept, and
+with nothing left that could claim a prekey, the same run produced `count=50 / deleted=50` twice over
+- **every publish followed by a purge of the whole batch**, and `needed=50` client-side, which is
+only possible against an empty pool. Reading one had been right all along.
 
-`heal-web.mjs` filtered the console through a **display** regex, then ran its matchers over the
-**filtered** text. A line the matcher accepts but the filter drops is invisible, so the check
-reported `escalated=false` on a run whose repair had demonstrably run.
+**Two rules come out of this and they are not the same rule.** The first is the one reading two
+taught and it stands: a client's `needed=N` is a subtraction over a number it fetched, so it reports
+the pool's LEVEL and can say nothing about the flow that set it - and a level is consistent with many
+flows, so ask the side that holds the ledger. The second is what reading two got WRONG: the server's
+numbers were true and the conclusion drawn from them was not, because a second mechanism was adding
+to the same counters. **Where a measurement has to attribute a quantity between two mechanisms, the
+only reliable move is to remove one of them and take it again.** Reasoning about which share belongs
+to which is how a correct measurement produces a wrong finding - and the sweep cost one command.
 
-A capture filter is presentation. The verdict reads **everything** the run produced, and only the
-report is abridged. If the two must share a regex, the verdict's is the superset - never the
-other way round.
-
-**A CHANGE LOG IS A PROJECTION TOO, and it is the one that reads like raw evidence.** `synboot.mjs`
-records a mark only when the banner or the layout offset CHANGES - which is right, because a
-histogram of samples cannot tell one 0.7 s appearance from a flicker. Its first verdict then counted
-marks in the post-startup window as if they were samples and required at least one, so an offset that
-never moved emitted nothing and scored as `FAIL` on the run that proved the fix. The evidence was
-perfect and the verdict inverted it. **When the record is transitions, the verdict must be stated in
-transitions** - "zero changes after ready", never "one distinct value after ready".
-
-#### 2. Every action asserts its own post-condition - and the post-condition is the RIGHT state, not a changed one
-
-The two halves are one rule because they fail together: a check that cannot prove its action took effect will happily accept any effect at all.
-
-An action that cannot prove it took effect still yields a verdict, and **that verdict is fiction**.
-The campaign produced this one five separate times:
-
-- `am kill` on a **foreground** process is a silent no-op - it returns success and the app lives.
-  Go HOME first, then assert the death (`pidof`).
-- A "relaunch" that opened a new tab instead, so the check measured a fresh page that had never been
-  through the transition it was testing.
-- A `pidof` that exits 1 **exactly when** the thing it measures happens, so the harness read the
-  failure as a shell error.
-- A navigation that failed, was swallowed, and left the check counting rows on the previous screen.
-- A zoom button never clicked, because the guessed `aria-label` did not exist - the check still
-  asserted "something changed" and passed.
-
-**"Did the state change" is almost never the assertion. "Did it change into the RIGHT state" is**
-
-The corollary of the last item above. A pinch check asserted that the scroll position moved; it
-moved, and the page had zoomed about the wrong point, which is the entire defect the check existed
-to catch.
-
-**Validate every check as a NEGATIVE CONTROL against the unfixed build before its green means
-anything**, and set its tolerance from those two measurements rather than from taste. A check that
-has never been seen to fail is not a check.
-
-#### 3. Assume a green check is wrong until its evidence says otherwise - and a FAIL too
-
-A FAIL is not evidence about the application until the fixture and the selector have been ruled out.
-Two examples on opposite sides:
-
-- A media check passed against a fixture whose PNG CRCs were invalid - it was never rendering
-  anything.
-- `check-feed-retry` reported FAIL against a feed that was visibly rendering posts, because it
-  counted `article` / `data-post-id`, neither of which the feed emits (`PostCard`'s root carries
-  `group/card`).
-
-**A locator failure does not bias the verdict in a predictable direction**, which is why it cannot
-be discounted as "conservative".
-
-#### 4. THE ABSENCE OF A FAILURE IS NOT EVIDENCE OF SUCCESS - prove the path was EXERCISED
-
-A check for "the push-authenticated fetch no longer 403s" counted zero rejections and wanted to call
-it PASS. But the process had cached both avatars hours earlier, so it never made a request: the
-verdict was measuring a path that did not run (WP-DIRECTBOOT-1). Every check whose assertion is the
-absence of something needs a second, POSITIVE assertion that the mechanism fired at all - and it must
-be reported next to the verdict, so a VOID run cannot be mistaken for a green one.
-
-The trap that hides it here is **two success logs one word apart**:
-
-| line | what it means |
-| --- | --- |
-| `fetchAvatar: from cache for X` | cache hit - **no network, no Keystore, nothing under test ran** |
-| `fetchAvatar: avatar cached for X` | an HTTP fetch succeeded and was written - the authenticated path DID run |
-
-A matcher written as `/(avatar cached\|from cache)/` therefore reports success for the one outcome
-that proves nothing. Read the source at the log site before trusting a string that merely sounds
-right; and to force the path, remove what makes it skippable - here
-`adb shell run-as fr.emse.canari rm files/avatar_*.jpg`, which works because the build is
-DEBUGGABLE, one of the few things a debug build is BETTER for (rule 17).
-
-**THE CHEAPEST POSITIVE CONTROL IS A CLIENT STILL RUNNING THE OLD BUILD, AND THE MIXED FLEET HANDS
-IT OVER FREE.** `synboot.mjs` reported zero banner appearances on both web clients after WP-BANNER-1,
-which is the verdict wanted and therefore the one to distrust: a probe whose selector had rotted
-would say exactly the same. A1 settled it without any extra work. The phone serves the bundle inside
-its APK (`frontendDist` is `../build`), so a deploy never reaches it, and its build predates the fix -
-so the SAME probe run against it caught the banner rising at 4 601 ms, 26 px high, held for 4 s.
-The instrument discriminates, so the zeros mean something.
-
-Two things came out of that control which the intended measurement could not have produced. The
-banner did NOT move `mainTop` on A1 (107 px throughout), so the 29 px displacement that delivered a
-click to the wrong button is a DESKTOP-layout consequence, not a universal one. And the verdict was
-counting marks rather than comparing offsets - two marks reading the same 107 scored as two
-movements - which is rule 1 again in a third dress: the mark fires on a change in the WHOLE probe,
-so only the field being judged may be compared.
-
-**AND A WHOLE PHASE CAN BE THE PATH THAT NEVER RAN.** Found 2026-08-16 by noticing that a run
-announcing NOTIF-10 had not cut the phone's radios: `notif.mjs` selects ONE check from `argv[2]` and
-defaults it (`|| '4'`), `notif7.mjs` does the same (`|| 'bg'`), and the manifest listed both bare. So
-`run.mjs NOTIF` ran two of five checks and reported the phase. Sweeping every manifest script for the
-shape found two more, and one names itself: **`tab236.mjs` implements checks 2, 3 and 6 and ran only
-2**, while `life.mjs` implements seven Android lifecycle states and ran only one. The manifest now
-spells every argument out - NOTIF 2 -> 5 scripts, TAB 3 -> 5, LIFE 1 -> 6.
-
-**A default is indistinguishable from a choice**, which is why nothing ever said so: no output
-differs between "the phase asked for check 4" and "the phase asked for nothing and got 4". The
-omission that must stay explicit is LIFE-5 - it REBOOTS the phone and the unlock afterwards needs the
-pattern, so it is a human check named in a comment rather than a gap nobody can see. **A coverage
-omission belongs in the manifest as a sentence, never as an absence.**
-
-**A RUNNER THAT BUFFERS ITS CHILD'S OUTPUT UNTIL EXIT CANNOT REPORT THE FAILURE THAT NEVER EXITS.**
-The same day and the same cause: every phase script announces its stages on stderr precisely so a
-stall is distinguishable from slowness - `notif.mjs` says so in its own header - and `run.mjs`
-collected the whole stream into a string it only wrote on `close`. Two `notif.mjs` processes sat
-there for FOUR HOURS driving the same browsers as every other measurement of the day, and were found
-by listing OS processes, not by the runner that owned them. There is now a heartbeat and a watchdog
-that bounds SILENCE rather than work - set well past NOTIF-10's deliberate 600 s of quiet - and it
-kills and ACCUSES rather than retrying, because a runner that quietly restarts a hung script hides
-what it exists to surface. `STALLED` is reported as itself: a killed child otherwise reports a signal
-and reads as an ordinary crash in its last statement.
-
-**Where the defect can be re-created, the check should re-create it.** WP-RELOAD-DL-1 asserts that a
-reload does NOT navigate - and a build with deep links entirely broken passes that too. Deleting the
-one key the fix relies on (`sessionStorage['canari:deeplink:handled']`) and reloading again brought
-the replay straight back, which is what turns "nothing happened" into "the guard held". A PASS whose
-failure you cannot produce on demand is the weakest kind there is.
-
-**AND WHEN THE RE-CREATION IS A RACE, THE CHECK MUST ASSERT THAT IT WON IT.** `burn.mjs` sends, waits,
-reloads, and asserts the next message arrives. Its premise is that the reload landed inside the
-checkpoint window - and a run that MISSES the window delivers that message too, identically, proving
-nothing. First run, 2026-08-14, at the 300 ms the original defect was measured at: the checkpoint had
-already landed, and a check that reported only "delivered" would have been a green light for a repair
-that never ran. The window had narrowed to under 60 ms since that measurement, because an unrelated
-fix had made the write faster. So the premise is read and reported separately from the result, and a
-run that failed to reproduce itself is `INCONCLUSIVE` - never `PASS`.
-
-**Pick the witness that does not depend on listening at the right millisecond.** The repair prints a
-line, and the obvious check greps for it. But a reload that does not raise the PIN gate starts
-initialising before a CDP session can re-attach, so on the run that PASSED the line was missed
-entirely (`burnedLine: null`) while the repair had demonstrably happened. A verdict resting on that
-capture would have read "no burn" and been believed. The counters the repair consults are DURABLE and
-can be read on either side of the reload at leisure: deficit before, deficit after. **Where a
-mechanism leaves both a log and a state, the state is the witness** - the log is how a human finds it,
-not how a check proves it.
-
-##### The sharpest instance: a run that printed PASS while the branch never ran
-
-WP-ECHO-1's device check sends its own message "during a drain" and asserts it survives a reload.
-Version 2 printed `PASS - every message sent during a drain survived the reload`, on seven real sends
-and a real reload. The capture said otherwise: the seven sends were at 13:20:23-13:20:39 and the
-run's **first drain opened at 13:20:42**. Nothing had been sent during a drain at all, so the fix
-under test was never reached and the correct verdict was VOID.
-
-The cause was structural, not carelessness: the check spaced its sends with `sleep`, and the window
-it needed to hit is the app's own bulk-ingest phase, which measured **15 ms to 1.4 s** depending on
-the decrypt. A delay cannot aim at a duration the app chooses. Two changes fixed it, and both
-generalise:
-
-- **Trigger on the SYSTEM's own signal, not on a delay.** The check now arms the composer, waits for
-  the phone's log to show a new window opening, and fires into it - so the only work between the
-  event and the action is one CDP round trip. (`armComposer`/`fireComposer` exist purely to make
-  that gap small; the ordinary `send` is now their composition, so nothing else changed.)
-- **Report the exercise count NEXT TO the verdict, from an exact discriminator.**
-  `[ADD_MSG] ✓ Message added` is logged by `addMessageToChat` alone, and inside a window an inbound
-  message returns early into the buffer without logging it while the later flush goes through
-  `batchAddMessages`, which never logs it. So that line inside a window can only be an own message on
-  the live path. The run reports `inside a window: N`, and **N = 0 is a VOID**, whatever the reload
-  then shows. The passing run reported 5.
-
-The general form: when a check must act inside a window it does not control, find the log line that
-opens the window, and find a line that can only be emitted by the branch under test. Without the
-first the check cannot aim; without the second it cannot tell you it hit.
-
-##### The corollary for a PERFORMANCE verdict: fast and skipped look identical on a clock
-
-WP-ANR-1's check measures a duration - `onReceive` to `drainPendingOutbox: done` - against the 60 s
-the OS gives a `goAsync()` receiver. It came back at **2 331 ms** where the defect measured 58.6 s,
-and that number on its own is worth nothing: a drain that saw the radios were off and gave up before
-encrypting anything would also finish in two seconds, and it is a perfectly plausible implementation.
-A duration is a *lower* bound on work done, never a statement that the work happened.
-
-So the exercise assertion for a performance check is a COUNT of the expensive operation, taken from
-a line only that operation can emit. Here: 100 `PrivateMessage::try_from_authenticated_content` and
-100 **distinct** ratchet generations in the OpenMLS trace, against **one** `MlsDeviceKeyStore.retrieve`
-for the whole process. That triple is the `O(|mls.bin| + N)` shape observed rather than assumed -
-and the keystore-load count is the one that would have caught a regression back to the per-message
-entry point, because that regression is fast per call and only the *number* of loads betrays it.
-
-#### 37. A REQUEST SENT IS NOT A REQUEST ANSWERED, AND ONLY ONE OF THE TWO IS EVIDENCE
-
-DEL-10's predicate counted `Network.requestWillBeSent` for a `DELETE` matching the group URL, and
-called the count "the deletion reached the server". With the radios cut, the browser fires that event
-and the request goes nowhere - so the check's central claim, "nothing was sent while offline", was
-being tested against a stream in which the offline send is indistinguishable from an answered one.
-The check was verifying the wrong half of the mechanism it was written for.
-
-The fix is the correlation CDP already gives: keep the `requestId` of each matching
-`requestWillBeSent`, then count only the `Network.responseReceived` whose `requestId` is in that set,
-and record the STATUS with it. An attempt and an answer are then separate numbers in the row, which is
-what lets the verdict say "sent once while offline, answered zero times" - a sentence the old row
-could not express.
-
-**And the answer the client saw is still not the state of the world.** A 200 to the DELETE says the
-server accepted it; whether the row is really gone is a question only the database answers.
-`del10` now reads `dm_groups."deletedAt"` over `psql` after the run, so the row carries
-`onServerAfter` beside the request counts. That is the check's real subject - the defect WAS a group
-surviving server-side - and no amount of network evidence substitutes for it.
+This is also why the campaign's `PASS-DIRTY` rows and its debris warnings are not hygiene. The
+preflight had listed those 42 groups on the very run that was misread, under `server-side delete
+owed, run cleanup.mjs`. The instrument said so and the reading did not stop for it.
 
 ### Reaching the thing under test
 

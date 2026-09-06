@@ -13,40 +13,39 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
-- **A device disowned 49 prekeys thirty-one seconds after publishing them, and had the server delete
-  them.** Found by keeping the raw logcat of one NOTIF-1b run on a Mi 9T and then asking the server
-  what it had actually seen. Client side: `needed=49` on every connection, then
-  `reconcilePublishedKeyPackages: purged 49/50 orphaned prekey(s)`. Server side, same run, same
-  device - `REGISTER_PREKEYS count=49` at 18:15:44 and `PRUNE_PREKEYS deleted=49` at 18:16:15. A
-  device cannot have lost the private key of a package it minted half a minute earlier, so
-  `keyPackageHasPrivate` answered `false` about this device's own fresh mints: a broken seam between
-  minting and asking.
+- **A device published fifty one-time prekeys and immediately purged all fifty, on every
+  connection, so its pool was empty essentially always.** Measured on a Mi 9T. The delivery service,
+  on an estate swept clean so that nothing could claim a prekey: `count=50` then `deleted=50`, then
+  `count=50` then `deleted=50` again - every publish followed by a purge of the whole batch. The
+  client agrees from its side with `needed=50` at every connection, which is only possible against
+  an empty pool. `reconcilePublishedKeyPackages` was asking `keyPackageHasPrivate` about packages
+  the device had minted seconds earlier and being told `false`.
 
-  **The first reading of the client log was wrong and the server refuted it.** It looked like the
-  purge was undoing every top-up so the pool never filled; in fact 148 prekeys were inserted, 49
-  pruned and 1 remains, so **98 were legitimately CLAIMED by peers** - the preflight for that run
-  listed ~25 leftover test groups owed a delete, and every re-add consumes one. Claims empty the
-  pool here, not the purge. What survives is the disowning itself, which is real either way.
-
-  The mint rate is therefore mostly honest, and that is what makes the local store's behaviour the
-  problem: nothing deleted a bundle before 2026-09-06 and it now sheds only at 84 days. `mls.bin`
-  went from 19 548 753 to **20 812 360 bytes in one day**, a single checkpoint from 17.1 s to
-  **48.4 s**, and a row that had passed that morning failed on it - NOTIF-1b reported
-  `notifiedInMs = 20887` against 2 152 ms on the same build, which is not a notification defect but
-  a phone sitting inside a forty-eight-second checkpoint.
+  **This is worse than the disk cost.** A device with an empty one-time pool is served its STATIC
+  FALLBACK to every peer that asks, which is precisely the condition the `last_resort` marking
+  shipped for on the same day - so that fix is load-bearing for the normal path rather than a safety
+  net for an edge case, and it explains why `NoMatchingKeyPackage` was so easy to reproduce before
+  it. The disk cost is real too: ~97 kB of dead bundles per connection into a store that sheds only
+  at 84 days, `mls.bin` 19 548 753 -> 20 812 360 bytes in a day, one checkpoint 17.1 s -> 48.4 s.
 
   `reconcilePublishedKeyPackages` now refuses to purge any prekey THIS process published, and says
-  so at `error`. **The guard is provenance, not a proportion**, and that distinction is the whole
-  design: a device restored from an older backup really has lost every private key it published, and
-  purging 50 of 50 is exactly what the function exists to do - so "too many orphans" cannot be the
-  test without breaking the legitimate case. What separates the loop from that case is that this
-  process minted these bytes and therefore holds their private key by construction, so a `false`
-  about one of them is never evidence about the server; it is evidence that the seam between minting
-  and asking is broken. `mls-core/tests/published_prekeys_are_recognised.rs` shows that seam is not
-  in Rust - 50 of 50 recognised through a publish round trip, the last-resort fallback included, and
-  another device's package correctly refused - which narrows the remaining cause to the IPC and
-  ordering above it, still open in `docs/wiki/backlog.md`. What is closed here is the silence: a
-  reconciliation undoing its own top-up looked exactly like one doing its job.
+  so at `error`. **The guard is provenance, not a proportion**, and that is the whole design: a
+  device restored from an older backup really has lost every private key it published, and purging
+  50 of 50 is exactly what this function exists for - so "too many orphans" cannot be the test
+  without breaking the legitimate case. What separates the loop is that this process minted these
+  bytes and therefore holds their private key by construction.
+  `mls-core/tests/published_prekeys_are_recognised.rs` shows the broken seam is not in Rust - 50 of
+  50 recognised through a publish round trip, the fallback included, a foreign package correctly
+  refused - and `toBase64`/`fromBase64` are exact inverses with the server storing the base64
+  verbatim, which rules out the encoding path end to end. The remaining cause is in the IPC and
+  ordering above mls-core, still open in `docs/wiki/backlog.md`.
+
+  **It took three readings and two of them were wrong**, which is recorded in the backlog because
+  the sequence is the lesson: the client log alone said "closed loop"; asking the server said "98
+  were claimed by peers, so the purge is a bit part"; and sweeping 42 leftover test groups showed
+  those claims were debris hiding the loop underneath. A measurement taken on a dirty estate cannot
+  separate the mechanism from the noise, and the fix was to clean and re-measure rather than to
+  reason harder.
 
 - **The local MLS keystore never deleted a key package, so a phone's `mls.bin` reached 19.5 MB and
   a single checkpoint cost seventeen seconds.** Minting a key package writes its private bundle to

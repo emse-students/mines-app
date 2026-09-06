@@ -4743,30 +4743,50 @@ lines.** One NOTIF-1b run, lasting a couple of minutes, with the raw logcat kept
 same capture: **zero** `NoMatchingKeyPackage`, **zero** `republishKeyMaterial`, **zero** `[BG_SEND]`,
 **zero** `one-time pool EMPTY`. No storm, no healing, nothing exotic. **This is the ORDINARY path.**
 
-**THE DEFECT, STATED EXACTLY, AFTER THE SERVER WAS ASKED.** The first reading of the client log was
-*"the pool never fills because the purge undoes every top-up"*, and the server's own log refuted half
-of it. `chat-delivery-service` and the `one_time_key_package` table, same run, phone
-`tauri-f7a9bb80...`:
+**THE DEFECT, SETTLED ON A CLEAN ESTATE - AND THIS ENTRY WAS WRONG TWICE BEFORE IT GOT HERE.**
+The sequence matters more than the conclusion, because both wrong readings were reasonable.
+
+*Reading 1, from the client log alone:* `needed=49` every connection and `purged 49/50` right after
+each top-up - a closed loop, the purge undoing its own refill.
+
+*Reading 2, after asking the server:* 148 inserted, 49 pruned, 1 remaining - so **98 had been CLAIMED
+by peers**, about one a second. That looked like it demoted the purge to a bit part, and this entry
+was rewritten to say claims empty the pool and the purge does not. **It was wrong.** The run had been
+taken on an estate carrying **42 live throwaway groups** a crashed check had left behind, and every
+reconnection re-entered all of them, so those claims were DEBRIS sitting on top of the real
+mechanism and hiding it.
+
+*Reading 3, the measurement that settles it:* `cleanup.mjs` swept 42 groups, 6 salons and a
+community; the run was repeated with nothing left that could claim a prekey. The delivery service,
+same phone, no peers inviting:
 
 ```
-18:15:44  REGISTER_PREKEYS  count=49
-18:16:14  REGISTER_PREKEYS  count=49
-18:16:15  PRUNE_PREKEYS     deleted=49     <- the purge
-18:17:05  REGISTER_PREKEYS  count=50
+count=50            <- publish 50
+count=49  count=49
+deleted=49          <- purge
+count=50            <- publish 50
+deleted=50          <- purge ALL FIFTY
+count=50            <- publish 50
+deleted=50          <- purge ALL FIFTY
+count=50
 ```
 
-148 inserted, 49 pruned, and the table now holds **1** row - so **98 were CLAIMED by peers**, at
-roughly one a second. The drain is therefore mostly LEGITIMATE and mostly environmental: the
-preflight for this very run listed ~25 leftover `HGRP` groups owed a server-side delete, and every
-re-add consumes a prekey. *"The pool never fills"* was the wrong sentence and the count-based
-reasoning behind it was wrong; claims, not the purge, are what empty it here.
+**Every publish is followed by a purge of the whole batch, and `deleted=50` says it with no
+arithmetic to argue about.** The client agrees from its own side: `needed=50` at every connection -
+not 49, not 30 - which is only possible if the pool is EMPTY each time. Reading 1 was right, and the
+debris is what made it look like something else.
 
-**What survives that correction, and it is the whole reason this entry exists:** at 18:15:44 the
-device published 49 prekeys, and at 18:16:15 - **thirty-one seconds later** - it declared 49
-published prekeys orphaned and had the server delete them. Those were not claimed; they were
-disowned. A device cannot fail to hold the private key of a package it minted half a minute earlier,
-so `keyPackageHasPrivate` answered `false` about this device's own fresh mints. **That is a broken
-seam between minting and asking, and it is real regardless of what else drains the pool.**
+**WHAT THIS MEANS IN PRODUCTION, AND IT IS WORSE THAN THE BLOB.** A device whose one-time pool is
+empty is served its STATIC FALLBACK to every peer that asks. That is exactly the condition
+[mls-protocol](protocols/mls-protocol.md#the-two-kinds-of-key-package) names as the reason the
+fallback had to be marked `last_resort` - and this loop puts a device in that condition ESSENTIALLY
+ALWAYS rather than rarely. The 2026-09-06 `last_resort` fix (#390) is therefore not a safety net for
+an edge case; it is load-bearing for the normal path, and it explains why `NoMatchingKeyPackage` was
+so easy to reproduce before it.
+
+**And a device cannot fail to hold the private key of a package it minted seconds earlier**, so
+`keyPackageHasPrivate` is answering `false` about this device's own fresh mints: a broken seam
+between minting and asking, real and reproducible on a clean estate.
 
 **What each round costs.** ~50 bundles x 1 936 bytes = ~97 kB written into a state that nothing
 prunes below 84 days. Measured across one day on this handset:
@@ -4777,11 +4797,11 @@ prunes below 84 days. Measured across one day on this handset:
 | one checkpoint | 17.1 / 17.1 / 19.7 s | **25.7 s / 48.4 s** | ~2.5x |
 
 +1.26 MB a day is ~652 bundles a day at the measured weight, which is ~13 rounds of fifty - entirely
-consistent with the four rounds seen in a single two-minute run. **Note what that arithmetic does and
-does not blame.** Most of those rounds are the client honestly replacing prekeys that peers really
-consumed; the purge accounts for one round in this capture, not all of them. The unbounded growth is
-therefore driven by the MINT RATE - which is legitimate - meeting a local store that until 2026-09-06
-never deleted anything and now only sheds at 84 days. **The growth feeds itself**: a bigger blob is a
+consistent with the rounds seen in a single two-minute run. **On a clean estate the whole of that is
+the loop**: with nothing able to claim a prekey, the device still published 50 and purged 50, three
+times in one run. This is not a client honestly replacing what peers consumed; it is a device
+refilling a pool it empties itself, into a local store that until 2026-09-06 never deleted anything
+and now only sheds at 84 days. **The growth feeds itself**: a bigger blob is a
 slower checkpoint, and a slower checkpoint widens every window in the app that a checkpoint sits
 inside. This is why the per-connection fallback reuse and a shorter local retention matter more than
 they looked - the mint rate is not going to fall.
