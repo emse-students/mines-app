@@ -2061,51 +2061,43 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
-### P1 - the message that repairs a rejoining device takes FIVE MINUTES to be received, and it is plausibly encrypted at the epoch that device has just left (measured 2026-09-06, three times)
+### P1 - the answer that repairs a rejoining device is QUEUED, never routed, and nothing makes the device come and get it (measured 2026-09-06, four times, on the gateway)
 
-HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device gets
-them - **314 seconds late**, which is 14 s after the row's 300 s budget gives up. The trail is exact
-and both sides are stamped:
+HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device does
+not get them. **It is not a delay and not a timer** - the first reading of this said "314 seconds",
+and that number was the HARNESS's own budget, not the product's.
+
+WHAT THE GATEWAY SHOWS, which is what settles it. Tracing one group by target:
 
 ```
-01:45:28  [device] [HISTORY_STATE] Sent for 762fbcd3 - 00000000...
-01:45:28  [W1]     [HISTORY_STATE] Keys differ - asked <device> to describe
-   ...    (the device logs NOTHING about the queue between 01:45:39 and 01:50:42)
-01:50:42  [device] [HISTORY_STATE] W1 holds something different - describing our store
-01:50:42  [W1]     [HISTORY_BUNDLE] Diff sent for 762fbcd3: 3 of 3 requested message(s)
+00:00:37  kind=mls  -> ...mtp1ptw5-e8b0   (the returned device)   <- one frame, at join
+   ...    nothing routed to that device for this group, at all
+00:05:44  kind=mls  -> ...mtnci3lc-7mhd   (W1)                    <- the device's digest, going OUT
 ```
 
-**REPRODUCED THREE TIMES**: the returned device (+314 s) and the reference minted minutes later
-(+308 s) in one run, and the returned device again (+300 s, budget exhausted) in a second run on a
-later build. Two devices, two builds, the same interval.
+**W1's `history_digest_request` was never routed to the returned device.** W1 logs
+`Keys differ - asked <device> to describe` at 00:00:37 and the gateway routes nothing to it. The
+request is persisted for a pull instead of delivered - and nothing tells the device to pull.
 
-**IT IS NOT A CLIENT-SIDE DEFERRAL.** The line is logged at the TOP of the `history_digest_request`
-branch, before `answerAfterMailboxDrained` is even called - so it stamps RECEIPT, not the answer.
-And the device was idle: no `[QUEUE]`, `[PENDING]` or `[ACK]` line at all in those five minutes.
+**WHAT FINALLY MOVES IT IS THE HARNESS RELOADING THE PAGE.** `messagesIn` gives up after 300 s and
+reloads; the digest goes out 4 s later in one run and 14 s later in the other, and the four
+"delays" - 314, 308, 307, 309 s - are all that budget plus a reconnect. Take the reload away and
+nothing here has a deadline at all: **the exchange waits for the next connection edge, which in a
+real session may be minutes, hours, or never.**
 
-**IT IS NOT THE ACK BARRIER OR THE ESCALATION**, both of which were suspected and both of which are
-now excluded by measurement rather than by argument. The ack deadline of 2026-09-06 did not move it;
-the exclusion-reason fix of the same day did not move it. It is also not `waitForGroupQueueIdle`,
-which cannot delay a line printed before it is reached.
+**THE LIKELY CAUSE IS A RACE WITH THE SUBSCRIPTION, and it is the same class as the four fixed on
+2026-09-05**: an answer that arrives before the asker can receive it. The device rejoins by external
+commit and sends its state key in the SAME SECOND; W1 answers within milliseconds, while the
+device's subscription for that group is not yet visible to the router, so the fan-out misses it and
+the frame is queued. Every other repair leg has been made to survive this; this one has not.
 
-**THE STANDING HYPOTHESIS IS MLS EPOCHS, AND IT COSTS ONE MEASUREMENT TO SETTLE.** The device rejoins
-by EXTERNAL COMMIT at 01:45:28, which advances the group's epoch. W1 answers the state key in that
-same second by sending `history_digest_request` INTO THE GROUP. If W1 has not yet applied the
-device's external commit, it encrypts at the old epoch - and the device, now past it, cannot read the
-one message that would repair it. The device logs `762fbcd3 holds 4 frame(s) it can never read` at
-01:45:41, four frames, immediately after joining. **If one of those is W1's digest request, the
-mechanism is confirmed.**
+  WHAT WOULD CONFIRM IT: the gateway's own subscriber set for that group at 00:00:37, against the
+  moment the device's `DeviceGroupMembership` row appears. Both are local and already logged.
 
-  WHAT SEPARATES IT FROM THE ALTERNATIVE - a plain delivery latency - is the epoch stamped on the
-  unreadable frames against the epoch W1 sent at. Both are already logged; nothing new has to be
-  instrumented, only correlated. The alternative predicts the frame arrives once and late; the epoch
-  story predicts it arrives ON TIME and unreadable, and that what lands at +300 s is a LATER,
-  readable one.
-
-**A REPAIR MESSAGE THAT CANNOT BE READ BY THE DEVICE IT REPAIRS IS THE SAME CLASS AS THE FOUR FIXED
-ON 2026-09-05**, and it is why HEAL-REVOKE-4 cannot pass: the row's control fails with it
-(`theREFERENCEGotWhatWasSaid: false`), so the row correctly refuses to conclude about its subject
-rather than reporting a green equality between two devices that both got nothing.
+**WHY IT SURVIVED TWO FIXES THE SAME NIGHT.** The ack deadline and the exclusion-reason bug were both
+suspected, both fixed, and neither moved the number - which is what forced the reading onto the
+gateway instead of the client, and is how the harness budget was finally recognised for what it was.
+A number reproduced four times looked like a product constant and was an instrument's.
 
 ### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
 
