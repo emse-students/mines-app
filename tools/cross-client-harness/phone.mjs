@@ -603,8 +603,31 @@ export function notifications() {
       text: b.replace(/\s+/g, ' ').slice(0, 900),
       title: (b.match(/android\.title=(?:String \()?([^\n)]*)/) || [])[1]?.trim() ?? '',
       body: (b.match(/android\.text=(?:String \()?([^\n)]*)/) || [])[1]?.trim() ?? '',
+      // The two fields that decide whether that body reaches a SCREEN - see `bodyIsDrawn`.
+      template: (b.match(/android\.template=(?:String \()?([^\n)]*)/) || [])[1]?.trim() ?? '',
+      inboxLines: Number((b.match(/android\.textLines=CharSequence\[\] \((\d+)\)/) || [])[1] ?? -1),
     }));
 }
+
+/**
+ * Whether this notification's body will actually be DRAWN, as opposed to merely carried.
+ *
+ * A DUMP IS NOT A SCREEN, AND THIS HARNESS SPENT A DAY BELIEVING IT WAS. Every notification check
+ * here matches on `full`, the whole `NotificationRecord` block - so `android.text` holding the right
+ * string satisfied all of them. On 2026-09-06 a Mi 9T drew a Canari notification as a sender's name
+ * with nothing under it while that same record carried the decrypted message, and NOTIF-1b had just
+ * passed its `itCarriedTheMessageAndNotJustASenderName` clause on exactly that. `GENERIC_BODIES`
+ * could not help: the body was not generic, it was invisible.
+ *
+ * The cause is mechanical, so the test is too. `tauri-plugin-notification` sends `"inboxLines": []`
+ * on every notification (a plain `Vec` with `#[serde(default)]` and no `skip_serializing_if`), its
+ * Android half branches on `!= null`, and an empty array is not null - so the notification is built
+ * with an `InboxStyle` holding ZERO lines. `InboxStyle` renders `textLines` and never `contentText`.
+ * Any other template, or an `InboxStyle` with lines in it, draws.
+ *
+ * Read out of the same dump every other check already reads, so it costs nothing per row.
+ */
+export const bodyIsDrawn = (n) => !(/InboxStyle/.test(n.template) && n.inboxLines === 0);
 
 /**
  * The exact bodies `CanariFirebaseMessagingService` renders when it could NOT decrypt.

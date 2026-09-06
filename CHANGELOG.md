@@ -13,6 +13,25 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A message notification on Android showed who had written and not what - the body was in the
+  record and on no screen.** Reported by the user as a banner naming a sender with nothing under it,
+  and found by looking at the shade rather than at the code.
+  `tauri-plugin-notification` 2.3.3 declares `inbox_lines: Vec<String>` with `#[serde(default)]` and
+  no `skip_serializing_if`, so its Rust side sends `"inboxLines": []` on EVERY notification; its
+  Android side reads that field as `List<String>? = null` and branches on `!= null`, and an empty
+  array is not null. So every notification the plugin posts is given an `InboxStyle` carrying zero
+  lines - and `InboxStyle` renders `textLines`, never `contentText`. Measured on a Mi 9T on
+  2026-09-06: `android.title = "Canari Test Beta"`, `android.text` holding the decrypted message,
+  `android.template = InboxStyle`, `android.textLines = CharSequence[] (0)`, and a shade showing the
+  name alone. **It only shows when the notification is by itself**, which is why it survived every
+  screenshot anyone had taken: inside a group the child row falls back to `contentText` and the body
+  reappears - four Canari notifications stacked in one shade all rendered, including the very one
+  that had shown nothing thirty seconds earlier on its own. Every `sendNotification` now passes
+  `largeBody`, which that same builder checks FIRST and answers with `BigTextStyle`. It is not a
+  workaround for its own sake: a message notification wants `BigTextStyle`, which is what the plugin
+  documents `largeBody` for. One helper rather than two call sites, and a source guard pinning that
+  no future call site posts a notification nobody can read.
+
 - **The PIN gate told the user the unlock had failed, in red, on every cold start of a real phone -
   while the unlock was working.** A ten-second watchdog in `handlePinSubmit` called itself a
   "temporal safety net" for "an unexpected early return or a hung network call" and, on expiry, set

@@ -37,6 +37,20 @@ const killPhone = async () => (await phone.killAndProveDead()).deadInMs;
 /** How many of the phone's current notifications mention `needle`. */
 const shadeHits = (needle) => phone.notifications().filter((n) => n.full.includes(needle)).length;
 
+/**
+ * How many of them mention `needle` AND will have it DRAWN.
+ *
+ * A DUMP IS NOT A SCREEN. `shadeHits` reads the whole `NotificationRecord`, so it is satisfied by a
+ * body sitting in `android.text` that the notification's own template never renders - which is
+ * precisely the state a Mi 9T was in on 2026-09-06 while NOTIF-1b passed its "carried the message"
+ * clause: sender's name drawn, message present in the record, nothing on the screen. See
+ * `phone.bodyIsDrawn` for the mechanism. The two counts are kept apart rather than one replacing the
+ * other, because their difference is itself the finding: hits without drawn hits means the
+ * notification arrived and said nothing.
+ */
+const drawnHits = (needle) =>
+  phone.notifications().filter((n) => n.full.includes(needle) && phone.bodyIsDrawn(n)).length;
+
 /** The shade's undecrypted notifications - shared, see `phone.undecryptedInShade`. */
 const undecryptedInShade = phone.undecryptedInShade;
 
@@ -125,6 +139,32 @@ const out = { check: `NOTIF-${which}` };
  */
 if (which === '1b') {
   const alive = () => ({ pid: phone.pid(), foregrounded: phone.foregrounded() });
+
+  // ── THE APP MUST BE SETTLED BEFORE IT IS HIDDEN, AND THAT IS PROVED, NOT WAITED OUT ────────────
+  //
+  // A cold start is not a steady state. Measured on 2026-09-06 immediately after an `install -r`:
+  // the app was still draining fifty pending invitations and running discovery when the marker was
+  // sent, the frame did not reach the JS layer, and the ten-second push backstop delivered the
+  // notification at 29 s - so the row read `itBeatTheDeferredPushWindow` unmet and accused a
+  // notification path that had simply not been asked yet. The same row had passed in 2190 ms an
+  // hour earlier on a warm app. The difference was the rig's, not the product's.
+  //
+  // A SLEEP WOULD BE THE WRONG FIX for the reason every sleep here is: it would be a guess about
+  // this handset that stops being true on the next one, and it would still be a guess after a
+  // conversation grew. So the settled state is PROVEN by exercising the very path under test - a
+  // warm-up message, received in the FOREGROUND, is the app demonstrating that its socket is up and
+  // routing to this conversation. If that fails, the run says so and stops rather than measuring a
+  // booting app and blaming the notification layer.
+  const warm = mark('NOTIF1BWARM');
+  stage(`warm-up: ${warm} must arrive in the FOREGROUND before anything is hidden`);
+  await send(w2, `${warm} proving the socket routes before we hide the app`);
+  out.warmUpInMs = await withDeadline(
+    awaitMessage(a1Setup, warm, 90_000),
+    95_000,
+    'A1 warm-up message'
+  ).catch(() => null);
+  stage(`warm-up ${out.warmUpInMs === null ? 'NEVER ARRIVED - the app is not routing yet' : `arrived in ${out.warmUpInMs}ms`}`);
+
   stage('backgrounding the phone with HOME - the app must stay ALIVE');
   phone.home();
   await sleep(3_000);
@@ -163,12 +203,19 @@ if (which === '1b') {
   // titles and bodies are real conversation content, and this ledger is read from a transcript. The
   // marker is synthetic, so matching ON it is safe; carrying what it matched is not.
   out.shadeHits = shadeHits(m);
+  out.drawnHits = drawnHits(m);
   out.undecrypted = undecryptedInShade();
 
   // THE PREVIEW IS HALF THE ROW. The reported symptom was a banner reading `Nouveau message de
   // <name>` with nothing under it - a notification that arrived and said nothing - so a clause that
   // only counted banners would have gone green on the defect exactly as the user reported it.
-  const carriesTheText = out.shadeHits > 0;
+  //
+  // AND COUNTING RECORDS WAS NOT ENOUGH EITHER, WHICH THIS ROW LEARNED BY PASSING WRONGLY. On
+  // 2026-09-06 it went green with `shadeHits: 1` over a notification whose body was in
+  // `android.text` and on no screen - `InboxStyle` with zero lines renders `textLines`, never
+  // `contentText`. The dump was right and the phone was blank. `drawnHits` reads the template out
+  // of that same dump, so the clause now asks what the user would SEE.
+  const carriesTheText = out.drawnHits > 0;
 
   // The app had it all along, which is what made the silence a defect rather than a loss.
   out.heldOnA1 = await withDeadline(countMessage(a1Setup, m), 45_000, 'A1 countMessage').catch(() => null);
@@ -177,6 +224,9 @@ if (which === '1b') {
   if (!out.atSend.pid) unmet.push('theAppWasStillAlive');
   if (out.atSend.foregrounded) unmet.push('theAppWasHidden');
   if (!out.reachableWhileHidden?.reached) unmet.push('theOsLetTheHiddenAppKeepItsNetwork');
+  // A RIG CLAUSE, NOT A PRODUCT ONE, and named so a reader can tell at a glance: the app was still
+  // booting, so nothing after this measures the notification layer.
+  if (out.warmUpInMs === null) unmet.push('theAppWasRoutingBeforeItWasHidden');
   if (out.notifiedInMs === null) unmet.push('aNotificationArrived');
   if (!carriesTheText) unmet.push('itCarriedTheMessageAndNotJustASenderName');
   if (out.notifiedInMs !== null && out.notifiedInMs >= 10_000) unmet.push('itBeatTheDeferredPushWindow');

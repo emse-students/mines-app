@@ -356,7 +356,17 @@ been run. To re-arm the precondition - it is NOT ambient, and a run made without
    must show 32 bytes. If the file is ABSENT the window is closed (a resume already migrated it) and
    the run measures nothing - go back to step 1. Use the PowerShell tool for this, never Bash, which
    rewrites the absolute device path.
-4. `bun scratch/k-run.mjs "<marker>" --background`, then answer from the shade.
+4. `bun tools/cross-client-harness/archive/k.mjs`, then answer from the shade when it says to.
+   **It is an atom now** - the `scratch/k-run.mjs` this line used to name never existed in the tree,
+   which is the whole reason this re-measurement sat unmade for a week. It performs steps 1-3 itself
+   and asserts each, so the only human part is the reply.
+
+   **AND THE BACKGROUNDED CASE CANNOT BE ANSWERED YET, for a reason found on 2026-09-06**: the JS
+   layer posts the notification when the app is alive, and it attaches NO quick actions - only
+   `CanariFirebaseMessagingService` does, and that runs when the app is dead. So the shade offers no
+   `Repondre` in the state this check is about. Filed as a P2 in [backlog](backlog.md); `k.mjs`
+   records `SKIPPED` rather than `FAIL` when no reply is made, so a run cannot be mistaken for a
+   product verdict.
 5. **Verdict lines:** `retrievePushSecret: newer secret adopted from pending_push_secret.txt -> Keystore`,
    then `sendQueuedMessagePush: HTTP 201`, then `1 sent, 0 remaining`. A `403` means the fix is
    wrong, not that the rig is.

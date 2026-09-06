@@ -209,6 +209,41 @@ export function useNotifications() {
   }
 
   /**
+   * The options every Tauri notification on this app must carry, and WHY `largeBody` is not optional.
+   *
+   * `tauri-plugin-notification` 2.3.3 declares `inbox_lines: Vec<String>` with `#[serde(default)]`
+   * and no `skip_serializing_if`, so the Rust side sends `"inboxLines": []` on EVERY notification.
+   * Its Android side reads that field as `List<String>? = null` and branches on `!= null` - and an
+   * empty array is not null. So every notification it posts is given an `InboxStyle` carrying ZERO
+   * lines, and `InboxStyle` renders `textLines`, never `contentText`. The body is in the record and
+   * on no screen.
+   *
+   * Measured on a Mi 9T on 2026-09-06. The notification for a real incoming message read:
+   *
+   *     android.title     = "Canari Test Beta"
+   *     android.text      = "K-mtq268w3ndf quick reply from the shade"   <- decrypted, present
+   *     android.template  = "android.app.Notification$InboxStyle"
+   *     android.textLines = CharSequence[] (0)                            <- empty
+   *
+   * and the shade showed the sender's name with nothing under it - which is the user's report of a
+   * banner that says who wrote but not what, exactly. It only shows when the notification is ALONE:
+   * inside a group the child row falls back to `contentText` and the body reappears, which is why
+   * this survived every stacked screenshot anyone had taken.
+   *
+   * `largeBody` is checked FIRST by that same builder and takes the `BigTextStyle` branch, which
+   * renders. This is not a workaround for the sake of one: a message notification wants BigTextStyle,
+   * which is what the plugin documents `largeBody` for ("support multiline text"). Passing the body
+   * twice is the price of an under-specified call that happened to be papered over by a bug.
+   *
+   * ONE HELPER RATHER THAN TWO CALL SITES, because the two `sendNotification` calls in this file are
+   * a message and an incoming call, and the next one to be added would have been a third chance to
+   * post a notification nobody can read.
+   */
+  function androidReadableBody(body: string): { body: string; largeBody: string } {
+    return { body, largeBody: body };
+  }
+
+  /**
    * Shows an OS notification for an incoming call.
    * Not rate-limited (unlike message notifications). Tap opens the conversation in /chat.
    */
@@ -239,7 +274,7 @@ export function useNotifications() {
     if (isTauriRuntime()) {
       try {
         if (await isPermissionGranted()) {
-          await sendNotification({ title, body, id: notifId });
+          await sendNotification({ title, ...androidReadableBody(body), id: notifId });
           incomingCallNotifId = notifId;
           return;
         }
@@ -432,7 +467,7 @@ export function useNotifications() {
         if (await isPermissionGranted()) {
           await sendNotification({
             title,
-            body,
+            ...androidReadableBody(body),
             ...(conversationId ? { id: stableNotifId(conversationId) } : {}),
           });
           // Best-effort: register a tap action so tapping the notification on
