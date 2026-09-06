@@ -1,6 +1,6 @@
 {
   "name": "chat-delivery-service",
-  "version": "0.16.4",
+  "version": "0.16.5",
   "scripts": {
     "build": "nest build",
     "start": "ts-node src/main.ts",

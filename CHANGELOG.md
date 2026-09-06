@@ -84,6 +84,8 @@ It now leaves by its own exit code (`EXIT_SLOT_HELD`, 75) and `ios.yml` reports 
 green, with a job summary naming what holds the slot. Anything else still exits 1 and still stops
 the web. Not a `continue-on-error`, which would have swallowed the real refusals too.
 
+## [0.16.5] - 2026-09-06
+
 ### Incident - 2026-09-06, every web login refused in v0.16.4
 
 **ADMIN BYPASS TAKEN, and this paragraph is the record the rule asks for.** `gh pr merge 399
