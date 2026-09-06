@@ -254,6 +254,17 @@ Deep links, system events, rosters and the channel/DM asymmetry are on those two
 
 ## Outbound delivery -> [chat](frontend/modules/chat.md), [history-reconciliation](protocols/history-reconciliation.md), [chat-delivery](services/chat-delivery.md), [mobile](frontend/mobile.md)
 
+- **MAKING ONE THING WAIT ON ANOTHER INHERITS ITS TERMINATION PROPERTIES, INCLUDING THE ONES
+  NOBODY HAD TO THINK ABOUT.** `ackMessagesWithRetry` bounded how many times it gives up - four
+  attempts - and bounded nothing about how long ONE attempt may take: its `fetch` carried no
+  signal and no timeout. That was invisible for as long as every caller `void`ed it, because a
+  promise nobody awaits may hang for ever at no cost. The moment a pull was ordered behind it, an
+  open silent socket stopped being a hung request and became a mailbox that never drains again -
+  and every ack chained behind it with it. **A RETRY COUNT IS NOT A DEADLINE**: a loop of four
+  attempts can be four unbounded waits, and the loop cannot tell, because it never gets control
+  back. So when you add a barrier, re-read what is now BEHIND it and ask of each thing whether it
+  is guaranteed to conclude - not whether it usually does. Found by asking that question, not by
+  an incident. [backlog](backlog.md)
 - **FIRE-AND-FORGET IS A LATENCY DECISION, NOT AN ORDERING ONE, AND THE TWO ARE SEPARABLE.** A
   request that must not block its caller can still ANNOUNCE itself, and the one path that must not
   overtake it can then wait. Every ack in `BaseMlsService` was correctly `void`ed - a drain must not
