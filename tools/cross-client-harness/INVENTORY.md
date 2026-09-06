@@ -127,7 +127,7 @@ One QUESTION each, composed of gestures, ending in a verdict in `results.ndjson`
 | `archive/heal.mjs` | After the generation-gap escalation: does the conversation HEAL, i.e. does the NEXT message |
 | `archive/healnew.mjs` | THE NEW-DEVICE HEAL ROWS - one runner, one row per invocation. |
 | `archive/healrevoke.mjs` | THE REVOKED DEVICE THAT COMES BACK AFTER THE WORLD MOVED - one runner, one row per invocation. |
-| `archive/k.mjs` | CHECK K - the notification QUICK REPLY from a merely BACKGROUNDED app (WP-NOTIF-1). |
+| `archive/k.mjs` | NOTIF-6c - the notification QUICK REPLY from a merely BACKGROUNDED app (WP-NOTIF-1). |
 | `archive/life.mjs` | LIFE-1..8 - the phone in every state an OS can put it in, one check per run. |
 | `archive/mention.mjs` | MENTION-1..6 - the @mention composer, the cleartext `mentionedUserIds` routing hint it produces |
 | `archive/msg1.mjs` | MSG-1: W1 -> W2, both foreground, DM, plain text. One copy, correct author, and it STAYS. |

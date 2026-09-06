@@ -87,6 +87,15 @@ const CLAIM = {
   // and the reconciler cannot recognise makes the reconciler wrong about the board, which is the
   // one thing it exists to be right about.
   INCONCLUSIVE: 'INCONCLUSIVE',
+  // AND IT HAPPENED AGAIN, EXACTLY AS DESCRIBED ABOVE (2026-09-06). `heal-w2.mjs` records
+  // `SETUP-FAILED` - its premise did not hold, so the app was never asked the question - and this
+  // map did not carry the word, so HEAL-W2 read `unstated` and was reported as a verdict the board
+  // had not written down. The board HAD written it down, in full, with both rig faults named. The
+  // comment above predicted this failure mode and did not prevent it, because a vocabulary shared
+  // between two files and enforced by neither drifts the moment a runner invents a word. That is
+  // the real gap, and it is filed in `backlog.md` - the fix is for the recorder to EXPORT the list
+  // and this file to import it, so a new verdict cannot be readable by one side alone.
+  'SETUP-FAILED': 'SETUP-FAILED',
   INVALID: 'INVALID',
   ERROR: 'ERROR',
   UNOBSERVED: 'UNOBSERVED',
@@ -186,6 +195,27 @@ function boardRowsFor(id) {
  */
 const DIAGNOSTIC = new Set(['PROBE', 'LOSSHUNT', 'A1-NAMES', 'CHECK-M', 'FREEZE-repro', 'PREFIX-1']);
 
+/**
+ * Ids a runner USED TO record under, mapped to the board row they were always measuring.
+ *
+ * Distinct from `DIAGNOSTIC` and deliberately not merged with it: a diagnostic never answered a
+ * row, while these answered one under the wrong name. Both are NAMED rather than matched by shape,
+ * for the same reason - "an id the board does not name" is this report's most valuable line, and a
+ * heuristic that swallowed a real runner would take that value away.
+ *
+ * THE LEDGER ROWS STAY. It is append-only, and destroying evidence to tidy a name is a worse trade
+ * than the name ever was - the entry is history about the INSTRUMENT, which is exactly what this
+ * file exists to make legible. What gets fixed is the runner, so nothing new arrives here.
+ *
+ * `K`: `archive/k.mjs` is named for check K in `device-verification.md`, whose step 1 is "Kill the
+ * app" - but it deliberately BACKGROUNDS instead, because the `HTTP 403` it re-measures appears
+ * only there and a killed app hides it completely. So it was always NOTIF-6c. The board could not
+ * have named it either way: the id grammar above requires a hyphen, and `K` has none. Its one row
+ * is a `FAIL` from a run nobody answered, recorded before `theShadeWasAnswered` existed to tell
+ * "the app refused" from "the room was silent".
+ */
+const RETIRED = new Map([['K', 'NOTIF-6c']]);
+
 if (!existsSync(LEDGER)) {
   console.log('[rows] no ledger at ' + LEDGER + ' - nothing has been recorded on this machine');
   process.exit(strict ? 1 : 0);
@@ -204,6 +234,7 @@ const latest = new Map();
 const perOrder = new Map();
 const divergent = new Map();
 const diagnostics = new Map();
+const retired = new Map();
 
 /** Worst first: a pair is only as good as its weakest half, and that is what the row claims. */
 const VERDICT_RANK = ['INVALID', 'FAIL', 'PARTIAL', 'VACUOUS', 'SKIPPED', 'PASS-DIRTY', 'PASS'];
@@ -227,7 +258,10 @@ for (const line of readFileSync(LEDGER, 'utf8').split('\n')) {
   if (!r || !r.id) continue;
   const hits = boardRowsFor(r.id);
   if (hits.length === 0) {
-    if (DIAGNOSTIC.has(r.id)) {
+    if (RETIRED.has(r.id)) {
+      retired.set(r.id, (retired.get(r.id) || 0) + 1);
+      continue;
+    } else if (DIAGNOSTIC.has(r.id)) {
       diagnostics.set(r.id, (diagnostics.get(r.id) || 0) + 1);
       continue;
     }
@@ -498,6 +532,17 @@ if (diagnostics.size) {
     '\n[rows] ' + diagnostics.size + ' diagnostic id(s) in the ledger, answering no row by design:'
   );
   console.log('  ' + [...diagnostics].map(([id, n]) => id + ' (' + n + ')').join('  '));
+}
+if (retired.size) {
+  console.log(
+    '\n[rows] ' +
+      retired.size +
+      ' RETIRED id(s) in the ledger - the runner now records the row they always measured:'
+  );
+  for (const [id, n] of retired)
+    console.log(
+      '  ' + id.padEnd(16) + '-> ' + RETIRED.get(id) + '  (' + n + ' historical row(s), kept as evidence)'
+    );
 }
 if (divergent.size) {
   console.log('\n[rows] ' + divergent.size + ' recorded id(s) the board does NOT name:');

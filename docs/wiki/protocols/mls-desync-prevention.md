@@ -167,6 +167,14 @@ What is still owed for the outbox hole is therefore NOT an awaited checkpoint. T
 the cost is a durable record of what the ratchet has already spent, written per send at the price of
 a key/value write rather than a snapshot, and consulted at load.
 
+> **THAT RECORD WAS BUILT - IT IS THE SUBSECTION DIRECTLY BELOW, SHIPPED 2026-08-14.** This paragraph
+> states the DEBT and the next one records its PAYMENT, and reading the first without the second is
+> not a hypothetical failure: a P1 was filed on 2026-09-06 concluding *"that record has not been
+> written"*, which would have had someone rebuild `sendRatchetLedger.ts` from scratch. **What the
+> ledger covers is the JS load path**; the native outbox drain is a separate engine that does not
+> consult it, and that gap - not a missing ledger - is what remains open in
+> [backlog](../backlog.md).
+
 #### The burn - designed against the OpenMLS source and shipped 2026-08-14
 
 **THE REPAIR IS A BURN, AND THIS CLIENT'S OWN RATCHET CONFIGURATION IS WHAT MAKES IT SAFE.** Read in
@@ -224,9 +232,22 @@ JS counters, which yields zero or an over-burn. Safe in both directions.
 `WasmMlsClient::skip_send_generations` and the `skip_send_generations` Tauri command are the two
 crossings, and the command sits in the single un-gated `generate_handler!`, so **iOS and Android get
 it from the same code** - the only platform split in this area is the background sender's entry
-point, never its logic. `sendRatchetLedger.ts` holds the counters, `BaseMlsService.persistCheckpoint`
-the pairing, and `BaseMlsService.reconcileSendRatchets` the repair, run from inside the `init`
-promise every caller already awaits so nothing can send before it.
+point, never its logic. `src/lib/mls-client/sendRatchetLedger.ts` holds the counters (**`mls-client/`, not
+`services/`** - this page said `services/` until 2026-09-06, and a grep at the wrong path returning
+nothing is half of why the P1 above concluded the mechanism did not exist),
+`BaseMlsService.persistCheckpoint` the pairing, and `BaseMlsService.reconcileSendRatchets` the
+repair, run from inside the `init` promise every caller already awaits so nothing can send before it.
+
+**WHAT THE LEDGER DOES NOT COVER, AND IT IS NOT A DETAIL.** The counters are read and written by the
+FOREGROUND only. Android runs four engines against one ratchet - foreground Tauri, FCM JNI, Worker
+JNI and the native outbox drain `send_messages_background_with_key` - and the drain loads `mls.bin`,
+encrypts every queued entry and saves, without ever asking what the foreground has emitted but not
+yet checkpointed. Two things hold it back and both are visibility-shaped rather than fact-shaped:
+`background_write_mls_bin` refuses while `foreground_is_active()`, which is a 30-second deadline
+released deliberately on `hidden`; and `reloadStateFromDisk`, the one thing that re-syncs the
+foreground to a background advance, has exactly one caller - the RESUME branch of
+`visibilitychange`. An app that is backgrounded and stays alive has released the guard, still holds
+a live in-memory client, and will not reload until a resume that may never come.
 
 **HOW IT IS PROVEN, AND WHY THE PROOF IS IN RUST.** `mls-core/tests/burn_spent_generations.rs` runs
 two real clients: alice sends two frames, bob consumes both generations, alice is restored from a

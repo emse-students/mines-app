@@ -615,10 +615,14 @@ unknown fields. Each candidate now recomputes its own `hash_ref` and must be nam
 stored under - exact by construction, since `openmls_memory_storage` builds every key as
 `label || json(id) || version`.
 
-**What this does NOT do.** It bounds growth at (mint rate x 84 days). It does not shrink a blob whose
-bundles are younger, so the two accrual paths - reusing a still-valid last-resort package instead of
-minting one per connection, and dropping locally what `republishKeyMaterial` has just purged
-remotely - remain open in [backlog](../backlog.md).
+**What this does NOT do.** It bounds growth at (mint rate x 84 days) and does not shrink a blob whose
+bundles are younger. Two accrual paths remain open in [backlog](../backlog.md): reusing a still-valid
+last-resort package instead of minting one per connection, and `republishKeyMaterial`'s 50 orphans.
+**The obvious fix for the second is wrong** - dropping the local bundles when the server pool is
+purged races a peer that claimed one seconds earlier with the Welcome still in flight. The
+discriminator exists only on the server: a claim and the row's deletion are atomic, so anything still
+present when `DELETE .../prekeys` runs is provably unclaimed. The endpoint returning the ids it
+deleted would let the client drop exactly those, with no race and no clock.
 
 ## How the state is encoded inside the envelope (WP-ANR-1, 2026-08-11)
 

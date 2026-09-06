@@ -4591,14 +4591,62 @@ MLS decryption failed at exactly its own epoch, so no redelivery can help:
 both sides, so this is not an epoch gap: a generation the peers had already consumed was re-issued.
 Both peers then paid a full history reconciliation to discover they already agreed.
 
-**THIS IS NOT A NEW DIAGNOSIS - IT IS THE ONE
-[mls-desync-prevention](protocols/mls-desync-prevention.md#8-client---no-state-replacement-may-rewind-this-devices-own-send-ratchet)
-ALREADY NAMES AS OPEN**, in as many words: *"`liveMutations` and every watermark compared against it
-are per-page-session state, while the OUTBOX is durable... What is still owed for the outbox hole is
-therefore NOT an awaited checkpoint. The shape that fits the cost is a durable record of what the
-ratchet has already spent, written per send at the price of a key/value write rather than a snapshot,
-and consulted at load."* That record has not been written. What is new here is that the hole has now
-been SEEN on hardware, by two independent observers, in a run doing nothing exotic.
+**THE DIAGNOSIS THIS ENTRY WAS FILED WITH WAS WRONG, AND THE CORRECTION MATTERS MORE THAN THE
+ENTRY** (2026-09-06). It quoted section 8's *"what is still owed... is a durable record of what the
+ratchet has already spent, written per send... and consulted at load"* and concluded **"that record
+has not been written."** It has. It was written and shipped on 2026-08-14, and every piece of it is
+in the tree:
+
+| piece | where |
+| --- | --- |
+| the counters | `src/lib/mls-client/sendRatchetLedger.ts` (+ its own test file) |
+| the pairing | `BaseMlsService.persistCheckpoint` |
+| the repair | `BaseMlsService.reconcileSendRatchets`, called from inside `init` |
+| the burn | `MlsManager::skip_send_generations` (`mls-core/src/messaging.rs`) |
+| the proof | `mls-core/tests/burn_spent_generations.rs`, `burn.mjs` on web AND native |
+
+The claim survived because section 8 states the debt in a paragraph that sits ABOVE the subsection
+recording its payment, and because the wiki gives the ledger's path as `services/` when it lives in
+`mls-client/` - so a grep for the file at the named path finds nothing and the prose above appears to
+confirm it. **This repository's own rule is that a claim of staleness must name the mechanism that
+would honour it and show that mechanism GONE**; this entry named it and never looked. Anyone acting
+on the old text would have rebuilt a shipped mechanism from scratch.
+
+**SO WHAT ACTUALLY REWOUND?** The ledger closes the JS load path: a client that sends, is reloaded
+before the checkpoint lands, and drains its queue in JS burns the deficit first. It does not cover
+every engine. On Android **four** engines advance the same ratchet - foreground Tauri, FCM JNI,
+Worker JNI, and the native outbox drain `send_messages_background_with_key` - and only the foreground
+consults `sendRatchetLedger`. The native drain loads `mls.bin`, encrypts each queued entry, saves
+once, and never asks whether the foreground has emitted frames that have not reached disk.
+
+Two things keep that from firing constantly, and the observed run is where both give out:
+
+- `background_write_mls_bin` refuses while `foreground_is_active()`, and the whole call fails, so no
+  ciphertext escapes. But that guard is **a 30-second deadline refreshed by heartbeat**, and it is
+  released deliberately on `hidden`. A backgrounded-but-ALIVE app - which is precisely what NOTIF-1b
+  asserts, *"process alive and still ACKing"* - has released the guard while its JS engine still
+  holds a live in-memory client.
+- `reloadStateFromDisk` is what re-syncs the foreground to a background advance, and its ONLY caller
+  is the `visibilitychange` **resume** branch in `ChatBackgroundService.svelte`. A phone that is
+  backgrounded and never resumed never runs it.
+- `reconcileOutboxSent` is likewise one-way and login/resume-only: the native side records what IT
+  delivered and the JS drains that file later. Nothing tells the native drain what the FOREGROUND
+  has already emitted.
+
+So the shape that fits the evidence is **two engines holding one ratchet with no reconciliation
+between them while the app is backgrounded and alive** - and the frame that was refused was the
+phone's read receipt for the warm-up message, sent around exactly that transition. **This is a
+hypothesis with a mechanism, not a measurement**, and it is written that way on purpose: the run's
+logs were not read for a `[BG_SEND]` line beside the rewind, and that single line is what would
+settle it. What is NOT a hypothesis is that the ledger exists and that the native drain does not
+consult it.
+
+**THE MEASUREMENT THAT SETTLES IT**, and it needs no new instrument: re-run NOTIF-1b with logcat
+kept, and look for `[BG_SEND] batch encrypted` or a background `mls.bin` write in the window around
+the `SecretReuseError`. If one is there, the diagnosis above is confirmed and the fix is an
+architectural one - one engine may advance the ratchet at a time, decided by a fact rather than by a
+visibility heuristic on a 30-second clock. If none is there, the foreground rewound on its own and
+the ledger's own coverage is what needs re-reading.
 
 **AND THE 19.5 MB `mls.bin` IS WHAT MAKES IT LIKELY RATHER THAN THEORETICAL** - the two entries above
 are one defect seen from two ends. `checkpointAfterSend` deliberately does not await, which was the
@@ -4658,6 +4706,125 @@ Tauri command bridging into `showNotification` and an answer to what happens on 
 neither the service nor FCM exists. **Check K stays unmeasurable in the backgrounded case until this
 is decided**, and `archive/k.mjs` records `SKIPPED` rather than `FAIL` when no reply is made, so a
 run cannot be mistaken for a product verdict.
+
+### P3 - the verdict vocabulary lives in two files and is enforced by neither, so a runner inventing a word makes the reconciler wrong about the board (2026-09-06)
+
+`results.mjs` decides what a check may record; `rows.mjs` carries its own `CLAIM` map to read those
+words back off the board. Nothing ties them together, so a runner that records a verdict the map
+does not list makes `rows.mjs` report `board: unstated` for a row the board states in full - which
+is a false accusation in the one report whose whole job is to be right about the board.
+
+**It has now happened twice, and the second time the warning was already written above the bug.**
+`INCONCLUSIVE` was missing and PIN-11, the first row to record one, read as unstated; a comment was
+added at that spot saying exactly why this must not recur. On 2026-09-06 `SETUP-FAILED` - which
+`heal-w2.mjs` has recorded since it was written - did the same thing to HEAL-W2. A comment is not a
+mechanism, and a vocabulary shared by two files and owned by neither drifts the moment a runner
+invents a word.
+
+**The fix is ownership, not another entry in the map.** `results.mjs` is where a verdict comes into
+existence, so it should EXPORT the list, and `rows.mjs` should import it - then a new verdict is
+readable by both sides or by neither, and the failure is a missing import rather than a silent
+misreading. A self-test asserting that every verdict `results.mjs` can produce is recognised by
+`rows.mjs` would pin it, and belongs with the other harness self-tests. `SETUP-FAILED` is added to
+the map meanwhile so the board reconciles today.
+
+### P1 - THE DEVICE PURGES 49 OF THE 50 PREKEYS IT HAS JUST PUBLISHED, SO THE POOL NEVER FILLS AND IT MINTS FIFTY MORE ON EVERY CONNECTION (measured on the Mi 9T, 2026-09-06 evening)
+
+**This is the engine under the 19.5 MB blob, and it was invisible until somebody counted the log
+lines.** One NOTIF-1b run, lasting a couple of minutes, with the raw logcat kept:
+
+```
+[MLS][Tauri] generateKeyPackage native batch path needed=49     x3
+[MLS][Tauri] generateKeyPackage native batch path needed=50     x1
+[MLS] reconcilePublishedKeyPackages: purged 49/50 orphaned prekey(s)
+```
+
+**197 pool prekeys plus 4 fallbacks in ONE run** - 201 bundles at 1 936 bytes, ~389 kB - and in the
+same capture: **zero** `NoMatchingKeyPackage`, **zero** `republishKeyMaterial`, **zero** `[BG_SEND]`,
+**zero** `one-time pool EMPTY`. No storm, no healing, nothing exotic. **This is the ORDINARY path.**
+
+**THE DEFECT, STATED EXACTLY, AFTER THE SERVER WAS ASKED.** The first reading of the client log was
+*"the pool never fills because the purge undoes every top-up"*, and the server's own log refuted half
+of it. `chat-delivery-service` and the `one_time_key_package` table, same run, phone
+`tauri-f7a9bb80...`:
+
+```
+18:15:44  REGISTER_PREKEYS  count=49
+18:16:14  REGISTER_PREKEYS  count=49
+18:16:15  PRUNE_PREKEYS     deleted=49     <- the purge
+18:17:05  REGISTER_PREKEYS  count=50
+```
+
+148 inserted, 49 pruned, and the table now holds **1** row - so **98 were CLAIMED by peers**, at
+roughly one a second. The drain is therefore mostly LEGITIMATE and mostly environmental: the
+preflight for this very run listed ~25 leftover `HGRP` groups owed a server-side delete, and every
+re-add consumes a prekey. *"The pool never fills"* was the wrong sentence and the count-based
+reasoning behind it was wrong; claims, not the purge, are what empty it here.
+
+**What survives that correction, and it is the whole reason this entry exists:** at 18:15:44 the
+device published 49 prekeys, and at 18:16:15 - **thirty-one seconds later** - it declared 49
+published prekeys orphaned and had the server delete them. Those were not claimed; they were
+disowned. A device cannot fail to hold the private key of a package it minted half a minute earlier,
+so `keyPackageHasPrivate` answered `false` about this device's own fresh mints. **That is a broken
+seam between minting and asking, and it is real regardless of what else drains the pool.**
+
+**What each round costs.** ~50 bundles x 1 936 bytes = ~97 kB written into a state that nothing
+prunes below 84 days. Measured across one day on this handset:
+
+| | 2026-09-06 morning | 2026-09-06 evening | delta |
+| --- | --- | --- | --- |
+| `stat mls.bin` | 19 548 753 | **20 812 360** | **+1 263 607 (+6.5%)** |
+| one checkpoint | 17.1 / 17.1 / 19.7 s | **25.7 s / 48.4 s** | ~2.5x |
+
++1.26 MB a day is ~652 bundles a day at the measured weight, which is ~13 rounds of fifty - entirely
+consistent with the four rounds seen in a single two-minute run. **Note what that arithmetic does and
+does not blame.** Most of those rounds are the client honestly replacing prekeys that peers really
+consumed; the purge accounts for one round in this capture, not all of them. The unbounded growth is
+therefore driven by the MINT RATE - which is legitimate - meeting a local store that until 2026-09-06
+never deleted anything and now only sheds at 84 days. **The growth feeds itself**: a bigger blob is a
+slower checkpoint, and a slower checkpoint widens every window in the app that a checkpoint sits
+inside. This is why the per-connection fallback reuse and a shorter local retention matter more than
+they looked - the mint rate is not going to fall.
+
+**IT ALSO EXPLAINS A ROW THAT FAILED THE SAME EVENING.** NOTIF-1b went `FAIL` with
+`notifiedInMs = 20887` against 2 152 ms that morning, on the same build. Twenty-one seconds is not a
+notification defect - it is the phone sitting inside a 25-to-48-second checkpoint. The row was
+measuring the blob.
+
+**WHERE THE FAULT IS NOT.** `mls-core/tests/published_prekeys_are_recognised.rs` mints 50 prekeys and
+asks `key_package_has_private` about each through the publish round trip: all 50 recognised, the
+last-resort fallback recognised, and another device's package correctly refused. **So the Rust is
+right and the defect is above it** - in the seam between publishing and asking. That narrows it to a
+short list, and each is checkable without a phone:
+
+1. the bytes `listOwnPrekeys` returns are not byte-identical to what `publishKeyPackages` sent
+   (base64 framing, `number[]` marshalling across the Tauri IPC);
+2. the manager answering `key_package_a_clef_privee` is not the one that minted - a state reload
+   inside the 48-second checkpoint window would do it, and that window is now enormous;
+3. the reconciliation races the publish and reads a list the mint has not landed in.
+
+**WHY THE EXISTING SAFETY NETS DO NOT CATCH IT.** `reconcilePublishedKeyPackages` is documented as
+*"conservative: only purges PROVEN orphans"* and treats a validation error as "leave it alone" - so a
+package that cannot be checked survives. It has no floor and no rate check: **purging 49 of 50 is
+indistinguishable, to that function, from purging 1 of 50.** A reconciliation that removes ~all of
+what was just added is not conservative, it is a loop, and nothing says so. This repository's own
+rule applies exactly - a fallback's rate must be measured against the population before its name is
+believed.
+
+**WHAT IS OWED, IN ORDER.**
+
+1. **A floor and a loud refusal in `reconcilePublishedKeyPackages`.** If the orphan share exceeds a
+   sane fraction of the published set, that is not a device with lost key material - it is this bug,
+   and the function must refuse the purge and log an accusation rather than execute it. This is the
+   guard that would have surfaced the loop months ago and it does not depend on finding the cause.
+2. **Then the cause**, from the three-item list above. Item 1 is settled by logging both byte
+   lengths and a hash at publish and at list; item 2 by logging the manager's identity; item 3 by
+   awaiting the reconciliation instead of `void`-ing it.
+3. **The per-connection fallback reuse** already filed against the blob entry, which is the same
+   family of waste.
+
+**The 2026-09-06 prune (`prune_expired_key_packages`) does NOT fix this** and was never going to:
+these bundles are hours old, not 84 days. The prune bounds the ceiling; this loop is what fills it.
 
 ### P1 - `mls.bin` is 19.5 MB on a real phone, one checkpoint costs 17 SECONDS, and the PIN gate tells the user the unlock failed while it is still working (measured on the Mi 9T, 2026-09-06)
 
@@ -4736,11 +4903,27 @@ the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unl
 
    **WHAT THIS DOES AND DOES NOT CLOSE.** It bounds the leak permanently at (mint rate x 84 days),
    which is the durable fix. It does **not** promise to shrink *this* phone's blob today - only
-   bundles past 84 days go, so the reclaim depends on the install's age. **Two things are therefore
-   still open**, and they are the accrual itself rather than its cleanup: the per-connection
-   last-resort mint should be reused while it is valid and we still hold its private key
-   (`keyPackageHasPrivate` already answers exactly that), and `republishKeyMaterial` should drop
-   locally what it has just purged remotely instead of leaving 50 orphans behind.
+   bundles past 84 days go, so the reclaim depends on the install's age. **Two accrual paths are
+   therefore still open**, and they are the minting itself rather than its cleanup.
+
+   1. **The per-connection last-resort mint.** `generateKeyPackageImpl` publishes a fresh fallback
+      every time, and a `last_resort` package is reusable by construction - that is the whole point
+      of the 2026-09-06 fix. It should be re-minted only when the device can no longer back it, and
+      `keyPackageHasPrivate` already answers exactly that question about a fetched package. At
+      1 936 bytes a connection this is the STEADY-STATE floor of the leak, the part that survives
+      every storm being fixed: twenty connections a day over the 84-day prune horizon is ~1 680
+      bundles, over 3 MB, on a device doing nothing wrong.
+   2. **`republishKeyMaterial`'s 50 orphans - and the obvious fix for it is WRONG.** Dropping the
+      local bundles when the server pool is purged would race a join and lose it: a peer may have
+      claimed a prekey seconds before the purge with the Welcome still in flight, and the private
+      key it needs is precisely what would be deleted. **The discriminator exists, but only on the
+      server.** A claim and the row's deletion are one atomic operation, so anything still present
+      when `DELETE .../prekeys` runs is provably UNCLAIMED - and therefore provably safe to delete
+      locally. The endpoint currently returns nothing. Have it return the ids it actually deleted,
+      and the client can drop exactly those with no race and no clock. That is the repository's own
+      rule about never learning by failing what a fact could have told you: carry the discriminator
+      to where the decision is made, from where it is already known. It needs a server change, a
+      client change, and a delete-by-`hash_ref` in `mls-core`.
 
 **This is invisible to every gate in this repository.** The desktop clients carry a small state and
 the emulator never accumulates one; only a phone that has lived through a campaign shows it. It

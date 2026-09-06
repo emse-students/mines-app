@@ -1,5 +1,17 @@
 /**
- * CHECK K - the notification QUICK REPLY from a merely BACKGROUNDED app (WP-NOTIF-1).
+ * NOTIF-6c - the notification QUICK REPLY from a merely BACKGROUNDED app (WP-NOTIF-1).
+ *
+ * ## IT RECORDS `NOTIF-6c`, AND IT IS NOT CHECK K - THE FILE NAME IS HISTORY
+ *
+ * Check K's step 1 in [device-verification](../../docs/wiki/device-verification.md) is *"Kill the
+ * app"*, and the board names that NOTIF-6. What this file does is the opposite on purpose - HOME,
+ * process alive - because the 403 below appears ONLY there, and a killed app hides it completely.
+ * So the measurement is NOTIF-6c and always was; recording it as `K` gave one measurement two names
+ * and `rows.mjs` reported it, correctly, as an id the board does not name.
+ *
+ * The one `K` row already in the ledger is left alone - the ledger is append-only and destroying
+ * evidence to tidy a name would be worse than the name. It is a FAIL from a run nobody answered,
+ * taken before `theShadeWasAnswered` existed; the board carries a retired `K` line saying so.
  *
  * THIS IS THE RE-MEASUREMENT THE FIX HAS BEEN OWED SINCE 2026-08-30, and the runner
  * `device-verification.md` names for it (`scratch/k-run.mjs`) does not exist, which is why it was
@@ -39,7 +51,7 @@
  * MEANS anything: a fresh process, an armed file, a backgrounded-and-alive premise asserted at the
  * send, and the four verdict lines afterwards. It prints when to answer and waits.
  *
- * Usage: bun archive/k.mjs
+ * Usage: bun archive/k.mjs   (records NOTIF-6c)
  */
 import { APP_TAB, client, ensureChat, openConversation, send } from '../chat.mjs';
 import { gate, logcatReport, logcatSince, report, watch } from '../watch.mjs';
@@ -69,7 +81,7 @@ function pendingSecretBytes() {
   return /^\d+$/.test(out) ? Number(out) : null;
 }
 
-const out = { check: 'K' };
+const out = { check: 'NOTIF-6c' };
 
 // ── 1. A fresh process, so the Keystore cannot already hold this session's secret ────────────────
 stage('HOME, then am kill - never force-stop, which cancels every FCM broadcast to the package');
@@ -108,7 +120,7 @@ phone.home();
 await sleep(3_000);
 out.atSend = { pid: phone.pid(), foregrounded: phone.foregrounded(), procState: phone.procState() };
 
-const m = mark('K');
+const m = mark('NOTIF-6c');
 out.marker = m;
 stage(`sending ${m} (pid=${out.atSend.pid || 'DEAD'}, foregrounded=${out.atSend.foregrounded})`);
 await send(w2, `${m} quick reply from the shade`);
@@ -175,17 +187,17 @@ if (!out.theShadeWasAnswered) {
   // clauses are still recorded, so a reader can see how far the run got before the gesture was owed.
   out.verdict = 'SKIPPED';
   out.why = 'the notification was never answered - no CanariNotifAction broadcast in the window';
-  stage(`K -> SKIPPED (${out.why})`);
+  stage(`NOTIF-6c -> SKIPPED (${out.why})`);
 } else {
   out.verdict = unmet.length === 0 ? 'PASS' : 'FAIL';
-  stage(`K -> ${out.verdict} (403 seen: ${out.refused403}, unmet ${JSON.stringify(unmet)})`);
+  stage(`NOTIF-6c -> ${out.verdict} (403 seen: ${out.refused403}, unmet ${JSON.stringify(unmet)})`);
 }
 
 const phoneReport = logcatReport(await logcatSince(phoneWindowFrom), 'A1');
 const rW2 = await report(oW2);
 const gated = gate(out.verdict, { W2: rW2, A1: phoneReport });
 out.verdict = gated.verdict;
-record('K', gated.verdict, {
+record('NOTIF-6c', gated.verdict, {
   ...gated.detail,
   unmet,
   theShadeWasAnswered: out.theShadeWasAnswered,
