@@ -6135,3 +6135,16 @@ login up, and nothing in the chain would have said so. The verification that cau
 `grep` of `origin/main` after the fact. **Either arming is suspended while an incident is open, or a
 pull request touching a file the in-flight fix touches is held** - and the second needs no human
 switch, which makes it the better one.
+
+**AND THE HONEST CHECK FOR ITEM 2 CANNOT BE A CAMPAIGN ROW, WHICH IS WHY IT IS NOT ONE.** The rig has
+targeted the LOCAL estate since 2026-09-03, deliberately, so no row it could ever carry would have
+opened a session on `canari-emse.fr` or `dev.canari-emse.fr`. `deployed-wasm-check.mjs` closes the
+part that needs no account - and the next defect of this class may not be in the wasm at all, in
+which case it sees nothing. **The real check is a sign-in against the deployed estate, in the
+pipeline, right after the dev deploy and before the stable is allowed to proceed.**
+
+That needs a decision rather than code, which is why it stops here: a dedicated smoke account has to
+exist on both estates, its credentials have to be GitHub secrets, and somebody has to accept that a
+CI job holds a real login for a real user on production. **The alternative - that nobody signs in
+before users do - is what happened on 2026-09-06**, and it cost every user their access for the time
+it took one of them to report it.
