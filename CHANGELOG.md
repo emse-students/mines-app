@@ -11,6 +11,33 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Fixed - logging in was impossible on every iOS and Android TESTER build
+
+A TestFlight tester on the pre-release build was refused at login with **"Redirect URI Error"**,
+three times, and the app could do nothing about it: **the fault was in the identity provider's
+configuration, not in the client.**
+
+A packaged mobile client does not come back from the IdP to a URL, it comes back to its own custom
+scheme, `fr.emse.canari://callback`. A pre-release build authenticates against the `Canari Dev`
+OIDC provider - and that provider listed `fr.emse.canari.dev://callback` instead: **a scheme
+nothing in this repository declares.** The app's identifier is `fr.emse.canari` and the deep-link
+plugin registers that one scheme, so the dev provider was waiting for a callback no build could ever
+send. `Canari` and `Canari Local` both had the right entry; `Canari Dev` was the only one that
+differed, and it differed in the one dimension the three are supposed to share.
+
+Fixed on the provider: the real URI added with strict matching, and the dead `.dev` entry deleted -
+left in place it tells the next reader that a `.dev` scheme exists. Making the dev build answer to
+`.dev://` was the alternative and was rejected: it needs a separate bundle identifier, hence its own
+provisioning profile, App Store record and scheme declaration, where today a dev and a prod build
+differ only by `client_id` and API URL.
+
+**No gate here could see it, and one now can.** `frontend/src/lib/mobile/oidcRedirectScheme.test.ts`
+asserts that every `scheme://host` `oidcRedirectUri()` returns is one `tauri.conf.json` actually
+registers, with host `callback` and the app's own identifier as the scheme. It fails on exactly the
+string that caused this. It cannot see Authentik's database, which lives outside this repository -
+that half is protected only by `docs/wiki/infrastructure/authentik.md`, which now carries the three
+providers side by side and the restore clause for both hand-added URIs.
+
 ### Added - a daily report that says when a stable reached the web but not a store
 
 Making the App Store deferral green fixes the web being held hostage by a review queue, and creates

@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SITE, STATE_DIR } from './names.mjs';
-import { PKG, adb, serial } from './phone.mjs';
+import { PKG, adb, serial, useDevice } from './phone.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const REPO = resolve(HERE, '../..');
@@ -111,6 +111,18 @@ function authentikEnv() {
  * this directory already follow with the same `pathToFileURL` guard.
  */
 export async function armA1({ build = true, reverseOnly = false } = {}) {
+  // BINDS A1 ITSELF, because this atom is NAMED for it and therefore knows the answer.
+  //
+  // With two phones attached, `serial()` refuses rather than choosing - correctly, and it says so:
+  // "pass --device to an atom so it can call useDevice()". This file was that atom and did not,
+  // so `bun a1apk.mjs` on a two-phone bench aborted before the reverse, on an ambiguity the file
+  // itself could resolve. Making the CALLER export ANDROID_SERIAL is how the wrong phone gets an
+  // A1 build: the shell is where the two names are easiest to confuse.
+  //
+  // `useDevice` sets `ANDROID_SERIAL` in this process, so it also reaches the `adb` and `tauri`
+  // children spawned below - the binding is the whole subtree's, not this module's.
+  useDevice('A1');
+
   // ── the reverse, which is the whole of what a replug costs ──────────────────────────────────────
   function reverse(port) {
     const dev = serial();
