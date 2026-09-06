@@ -254,6 +254,16 @@ Deep links, system events, rosters and the channel/DM asymmetry are on those two
 
 ## Outbound delivery -> [chat](frontend/modules/chat.md), [history-reconciliation](protocols/history-reconciliation.md), [chat-delivery](services/chat-delivery.md), [mobile](frontend/mobile.md)
 
+- **BOTH LEGS OF AN EXCHANGE MUST SURVIVE THE SAME FAILURES, AND A CHANNEL IS PART OF THE
+  CONTRACT.** The history solicitation reaches its responder as a `control` frame - addressed to a
+  device, carried outside the group, immune to epochs. The ANSWER goes back as an ordinary MLS
+  group message. Measured 2026-09-06: a device that rejoins by EXTERNAL COMMIT creates the new
+  epoch, asks over `control`, and the responder - milliseconds behind, not yet having applied that
+  commit - replies at the OLD epoch, which the joiner holds no secrets for and never will. The
+  reply is unreadable BY CONSTRUCTION, the delivery service reports `online=true ... realtime=1`,
+  and every layer believes it succeeded. **Ask of any request/response pair whether the response
+  can be broken by something the request was deliberately protected from** - and when the two legs
+  travel differently, that difference is the bug, not an implementation detail.
 - **MAKING ONE THING WAIT ON ANOTHER INHERITS ITS TERMINATION PROPERTIES, INCLUDING THE ONES
   NOBODY HAD TO THINK ABOUT.** `ackMessagesWithRetry` bounded how many times it gives up - four
   attempts - and bounded nothing about how long ONE attempt may take: its `fetch` carried no

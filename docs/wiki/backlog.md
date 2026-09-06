@@ -2061,50 +2061,63 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
-### P1 - the answer that repairs a rejoining device is QUEUED, never routed, and nothing makes the device come and get it (measured 2026-09-06, four times, on the gateway)
+### P1 - the request travels on a channel epochs cannot break and the ANSWER does not, so a device that repairs itself by joining can never read the reply (measured 2026-09-06 on the gateway and the delivery service)
 
-HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device does
-not get them. **It is not a delay and not a timer** - the first reading of this said "314 seconds",
-and that number was the HARNESS's own budget, not the product's.
+HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device never
+gets them. **It is not a delay, not a timer, and not a delivery failure** - the first two readings of
+this said "314 seconds" and "never routed", and both were wrong. What is true is worse and simpler.
 
-WHAT THE GATEWAY SHOWS, which is what settles it. Tracing one group by target:
+WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end:
 
 ```
-00:00:37  kind=mls  -> ...mtp1ptw5-e8b0   (the returned device)   <- one frame, at join
-   ...    nothing routed to that device for this group, at all
-00:05:44  kind=mls  -> ...mtnci3lc-7mhd   (W1)                    <- the device's digest, going OUT
+00:00:37  [SEND][send-feb0c374] START  sender=<W1>  isCommit=false
+00:00:37  [SEND][send-feb0c374] QUEUED count=1
+00:00:37  [SEND][send-feb0c374] recipient=<the returned device>  online=true  queuedId=cdabf481
+00:00:37  [SEND][send-feb0c374] PUBLISHED recipient=<the returned device>
+00:00:37  [SEND][send-feb0c374] DONE queued=1 realtime=1
 ```
 
-**EXACTLY ONE frame reaches the device for that group, and then nothing for five minutes.** W1 logs
-`Keys differ - asked <device> to describe` at 00:00:37, and at 00:00:37 the gateway routes three
-`kind=mls` frames to W1 and ONE to the device. Whether that one is the digest request is NOT
-established - and it is the whole question, because six seconds later the device logs
-`27a8f5bf holds 4 frame(s) it can never read`. Either the request never reached it, or it reached
-it inside a frame the device could not decrypt. **Both readings end in the same place**: the device
-is waiting for something it will not get, and no timer, retry or edge is scheduled to change that.
+**It was delivered, live, in the same second, to a device the server knew was online.** The gateway
+agrees: exactly one `kind=mls` frame to that device for that group. Six seconds later the device
+logs `27a8f5bf holds 4 frame(s) it can never read`. **The answer arrived and could not be decrypted.**
 
-**WHAT FINALLY MOVES IT IS THE HARNESS RELOADING THE PAGE.** `messagesIn` gives up after 300 s and
-reloads; the digest goes out 4 s later in one run and 14 s later in the other, and the four
-"delays" - 314, 308, 307, 309 s - are all that budget plus a reconnect. Take the reload away and
-nothing here has a deadline at all: **the exchange waits for the next connection edge, which in a
-real session may be minutes, hours, or never.**
+**THE TWO LEGS OF ONE EXCHANGE TRAVEL ON DIFFERENT CHANNELS, AND ONLY ONE OF THEM SURVIVES AN EPOCH
+CHANGE.** The same second, from the same log:
 
-**THE LIKELY CAUSE IS A RACE WITH THE SUBSCRIPTION, and it is the same class as the four fixed on
-2026-09-05**: an answer that arrives before the asker can receive it. The device rejoins by external
-commit and sends its state key in the SAME SECOND; W1 answers within milliseconds, while the
-device's subscription for that group is not yet visible to the router, so the fan-out misses it and
-the frame is queued. Every other repair leg has been made to survive this; this one has not.
+```
+[COMMIT] base published with the commit group=GRP epoch=2      <- the joiner CREATED epoch 2
+[MEMBERSHIP_ACTIVE] device=<the returned device>
+[HISTORY_REQ] FORWARDED target=<W1> requester=<the returned device>   <- kind=CONTROL, device-addressed
+[SEND] sender=<W1> ...                                                <- kind=MLS, group, epoch-bound
+```
 
-  WHAT SEPARATES THE TWO READINGS, and it is one query on a local box: the queued-message row for
-  that device at 00:00:37 - present means it was persisted and never collected, absent means it was
-  fanned out live and landed unreadable. The gateway's subscriber set for the group at that instant
-  says which, and the epoch on the four unreadable frames against W1's sending epoch says the other.
-  Nothing new has to be instrumented; both are already written down.
+The device rejoins by EXTERNAL COMMIT, which advances the group to epoch 2. Its solicitation reaches
+W1 as a `control` frame - addressed to a device, carried outside the group, immune to all of this.
+W1's answer goes back as an ordinary MLS group message. If W1 has not yet applied the commit that
+created epoch 2 - and it has had milliseconds - it encrypts at epoch 1, and **a device that joined AT
+epoch 2 holds no epoch-1 secrets and never will**. The reply is unreadable by construction, not by
+accident, and the window is the width of one commit's propagation.
 
-**WHY IT SURVIVED TWO FIXES THE SAME NIGHT.** The ack deadline and the exclusion-reason bug were both
-suspected, both fixed, and neither moved the number - which is what forced the reading onto the
-gateway instead of the client, and is how the harness budget was finally recognised for what it was.
-A number reproduced four times looked like a product constant and was an instrument's.
+**NOTHING RETRIES, so the exchange simply dies.** The device sits holding four frames it cannot read
+and an answer it will never decrypt. In the campaign it looks like a 300 s delay only because the
+harness reloads the page when its budget expires, and the reconnect starts a fresh exchange at the
+current epoch - which then works instantly. **In a real session the reconnect may be minutes, hours,
+or never.**
+
+**THE FIX IS THE ASYMMETRY, and the request leg already shows what right looks like.** An answer to a
+device-addressed solicitation should not be sent as group ciphertext at whatever epoch the responder
+happens to hold: either it travels `control` as the request does, or the responder applies pending
+commits for that group before answering. **Anything that keeps the answer epoch-bound keeps the
+defect**, because the responder cannot know it is behind at the moment it replies.
+
+  READ WITH THE FOUR FIXED ON 2026-09-05, which are the same family: an answer that arrives before
+  the asker can receive it. Those four were about the WAITER not being there; this one is about the
+  answer being unreadable when it lands, which no amount of waiting fixes.
+
+**WHY IT TOOK THREE READINGS.** The ack barrier and the exclusion-reason bug were both suspected,
+both fixed, and neither moved the number - and it was that second failure to move it that forced the
+reading off the client and onto the gateway, where the "300 s" turned out to be the instrument's own
+budget. **A number reproduced four times looked like a product constant and was a harness's.**
 
 ### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
 
