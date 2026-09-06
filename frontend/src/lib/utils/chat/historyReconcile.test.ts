@@ -461,8 +461,11 @@ describe('the mailbox barrier', () => {
     // Returns void, synchronously: every responder leg runs inside the pipeline, so awaiting the
     // queue from there would be the drain waiting on itself.
     expect(
-      answerAfterMailboxDrained({ waitForMessageQueueIdle: gateway.wait } as never, answer)
+      answerAfterMailboxDrained({ waitForGroupQueueIdle: gateway.wait } as never, GROUP, answer)
     ).toBeUndefined();
+    // THE GROUP IT WAITS FOR, not the whole account: this leg describes ONE conversation, and a
+    // device rejoining twenty-nine of them reached whole-mailbox idle 189 s after it was asked.
+    expect(gateway.wait).toHaveBeenCalledWith('history answer', GROUP);
     await flush();
     expect(answer).not.toHaveBeenCalled();
 
@@ -474,7 +477,8 @@ describe('the mailbox barrier', () => {
   it('still answers when the barrier itself rejects - a broken queue must not silence a peer', async () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     answerAfterMailboxDrained(
-      { waitForMessageQueueIdle: vi.fn().mockRejectedValue(new Error('scheduler gone')) } as never,
+      { waitForGroupQueueIdle: vi.fn().mockRejectedValue(new Error('scheduler gone')) } as never,
+      GROUP,
       answer
     );
     await flush();
@@ -896,5 +900,54 @@ describe('noteCoverageShortfall', () => {
     await noteCoverageShortfall(mls, GROUP, W1, { since: SINCE, coveredFrom: NINETY_DAYS }, log);
 
     expect(statedCoverage(OTHER)).toEqual([]);
+  });
+  it('puts a silent member back when it is the only one online, instead of claiming a coverage nobody stated', async () => {
+    // `exclude` had ONE source for most of its life - the coverage chase, where every excluded
+    // member had ANSWERED and said how far back it reaches - so "excluded and online" really did
+    // mean the group was covered. The escalation added a second source meaning the opposite, and
+    // this branch could not tell them apart: measured on HEAL-REVOKE-4, a device logged `every
+    // reachable member (1) has stated its coverage` about a peer that had said nothing and was at
+    // that moment waiting for this device to describe itself.
+    const log = vi.fn();
+    const mls = {
+      isDistributionGroup: () => false,
+      waitForMessageQueueIdle: vi.fn().mockResolvedValue(undefined),
+      sendHistoryRequest: vi
+        .fn()
+        // The first ask elects the one member there is.
+        .mockResolvedValueOnce({ target: 'u:peer' })
+        // The escalation skips it, so the server has nobody left to elect.
+        .mockResolvedValueOnce({ noPeerOnline: true, excludedOnline: 1 }),
+    };
+
+    await reconcileGroup(mls as never, GROUP, log, 1_000);
+    await escalateReconciliation(mls as never, GROUP, log, 2_000);
+
+    const said = log.mock.calls.map((c) => String(c[0])).join(' | ');
+    expect(said).toContain('putting it back rather than claiming a coverage nobody stated');
+    expect(said).not.toContain('has stated its coverage');
+
+    // AND THE WALK IS CLEARED, which is the half that matters: suppressing the only candidate would
+    // leave the group with no possible responder for the rest of the session - strictly worse than
+    // the silence the escalation was answering. A later trigger elects it again.
+    mls.sendHistoryRequest.mockResolvedValueOnce({ target: 'u:peer' });
+    await escalateReconciliation(mls as never, GROUP, log, 200_000);
+    expect(mls.sendHistoryRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it('still treats a coverage chase exclusion as the termination proof it is', async () => {
+    const log = vi.fn();
+    const mls = {
+      isDistributionGroup: () => false,
+      waitForMessageQueueIdle: vi.fn().mockResolvedValue(undefined),
+      sendHistoryRequest: vi.fn().mockResolvedValue({ noPeerOnline: true, excludedOnline: 2 }),
+    };
+
+    // The default reason, which is what every ordinary caller and the coverage chase pass.
+    await reconcileGroup(mls as never, GROUP, log, 1_000, ['u:a', 'u:b']);
+
+    const said = log.mock.calls.map((c) => String(c[0])).join(' | ');
+    expect(said).toContain('every reachable member (2) has stated its coverage');
+    expect(said).not.toContain('putting it back');
   });
 });

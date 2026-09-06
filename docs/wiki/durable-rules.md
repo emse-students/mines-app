@@ -254,6 +254,45 @@ Deep links, system events, rosters and the channel/DM asymmetry are on those two
 
 ## Outbound delivery -> [chat](frontend/modules/chat.md), [history-reconciliation](protocols/history-reconciliation.md), [chat-delivery](services/chat-delivery.md), [mobile](frontend/mobile.md)
 
+- **BOTH LEGS OF AN EXCHANGE MUST SURVIVE THE SAME FAILURES, AND A CHANNEL IS PART OF THE
+  CONTRACT.** The history solicitation reaches its responder as a `control` frame - addressed to a
+  device, carried outside the group, immune to epochs. The ANSWER goes back as an ordinary MLS
+  group message. Measured 2026-09-06: a device that rejoins by EXTERNAL COMMIT creates the new
+  epoch, asks over `control`, and the responder - milliseconds behind, not yet having applied that
+  commit - replies at the OLD epoch, which the joiner holds no secrets for and never will. The
+  reply is unreadable BY CONSTRUCTION, the delivery service reports `online=true ... realtime=1`,
+  and every layer believes it succeeded. **Ask of any request/response pair whether the response
+  can be broken by something the request was deliberately protected from** - and when the two legs
+  travel differently, that difference is the bug, not an implementation detail.
+- **MAKING ONE THING WAIT ON ANOTHER INHERITS ITS TERMINATION PROPERTIES, INCLUDING THE ONES
+  NOBODY HAD TO THINK ABOUT.** `ackMessagesWithRetry` bounded how many times it gives up - four
+  attempts - and bounded nothing about how long ONE attempt may take: its `fetch` carried no
+  signal and no timeout. That was invisible for as long as every caller `void`ed it, because a
+  promise nobody awaits may hang for ever at no cost. The moment a pull was ordered behind it, an
+  open silent socket stopped being a hung request and became a mailbox that never drains again -
+  and every ack chained behind it with it. **A RETRY COUNT IS NOT A DEADLINE**: a loop of four
+  attempts can be four unbounded waits, and the loop cannot tell, because it never gets control
+  back. So when you add a barrier, re-read what is now BEHIND it and ask of each thing whether it
+  is guaranteed to conclude - not whether it usually does. Found by asking that question, not by
+  an incident. [backlog](backlog.md)
+- **FIRE-AND-FORGET IS A LATENCY DECISION, NOT AN ORDERING ONE, AND THE TWO ARE SEPARABLE.** A
+  request that must not block its caller can still ANNOUNCE itself, and the one path that must not
+  overtake it can then wait. Every ack in `BaseMlsService` was correctly `void`ed - a drain must not
+  wait on an HTTP round trip - and that was read as licence to let a pull start beside one.
+  `onDrainEnd` acknowledges the rows it drained and, in the same tick, `refetchFramesLeftBehind`
+  pulls; the server has not recorded the ack, so it returns those rows and the device meets its own
+  frames again. **Ask of every `void`ed call what must not overtake it. If the answer is not
+  "nothing", it owes a promise somebody awaits** - and the fix is that promise, never an await at
+  the call site, which would trade the defect for the stall the `void` existed to prevent. Second
+  time this exact shape has been paid for: WP-DUPDELIVERY-1 was the mirror image, a pull racing the
+  archive replay. [backlog](backlog.md)
+- **A DEFECT'S CAUSE IS OFTEN IN THE ROW THAT DID *NOT* REPRODUCE IT.** Four campaign rows carried
+  `delivery ... arrived twice` and all four were an empty store draining a backlog, which suggested
+  the store. HEAL-NEW-1 has an equally empty store and stayed clean - because nothing was online to
+  deliver anything, so there was no drain, no ack and no re-fetch. **The negative case is what
+  turned a correlation into a mechanism**, and it was already in the ledger. Before theorising from
+  the rows that failed, find the nearest row that should have failed and did not.
+
 - **A HANDSHAKE WHOSE RESPONDER WAITS A FIXED DURATION AND WHOSE ASKER ANSWERS AFTER UNBOUNDED WORK IS A RACE, AND IT IS LOST BY WHICHEVER DEVICE HAS JUST WOKEN UP.** The history reconciliation's second leg asks *describe yourself* and waits `DIGEST_TTL_MS` = 60 s; the asker answers only `answerAfterMailboxDrained`, deliberately, because a digest computed mid-queue describes a store still being completed. Both halves are right on their own. **Measured 2026-09-05: a device that had just rejoined took 67 s to drain twenty external joins and sent its digest seven seconds after the responder logged `no digest came`.** Nothing retried, and the reason is the SECOND half of the rule. The trigger that would have retried did fire - `holds 4 frame(s) it can never read` six seconds after the join - and it was swallowed by a 30 s coalescing window whose written justification is *"the next connection re-asks unconditionally either way"*. **A session that stays up has no next connection**, and the trigger's evidence is spent, so the deferral is permanent. The order pair of HEAL-REVOKE-7 isolates it to one number: the same runner, one variable, and the run whose first ask nobody could answer is the run that ends up COMPLETE, because its retry landed 42 s later, outside the window. **Two rules follow.** A deadline is not a termination proof - raising the 60 s buys the next slower boot nothing - and a leg that needs no remembered state to answer must not require a live waiter to answer it. And **coalescing is a promise that the in-flight ask covers the trigger it swallows**: where that cannot be shown, the swallowed trigger is REMEMBERED and re-asked when the window closes, never dropped against a reconnection that may never come. It cost two rows, HEAL-REVOKE-5 and HEAL-repair, read as two problems until the trail was captured. **And a
 SECOND cause with the same symptom was found by the re-run**: a server that elects a RANDOM
 responder so that retries can rotate past a frozen peer is written against a client that retries,

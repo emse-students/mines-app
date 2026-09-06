@@ -1886,7 +1886,7 @@ same string.
 records the `[READD]`/`[HISTORY*]` trail of all three clients on every run, filtered to the group by
 its id.
 
-### P2 - the history repair is correct now and takes THREE MINUTES, because a digest waits for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
+### P2 - FIXED THE SAME NIGHT - the history repair took THREE MINUTES because a digest waited for the asking device's WHOLE mailbox rather than the group it describes (measured on the local estate 2026-09-05)
 
 **The loss is fixed and what is left is a duration.** HEAL-REVOKE-7 `--order last`, on the build
 carrying all three fixes:
@@ -1914,9 +1914,17 @@ different question, and passing this group there would claim a nesting that does
 paragraph in `reconcileGroup` explains what that cost the last time). So this is a new capability on
 the queue, not a new argument: *are there frames pending for THIS group*.
 
-**Until then the cost is visible rather than hidden**: `reachedInMs` is recorded on every reading,
-and a repair that starts taking longer shows up as a number in the ledger instead of as a row that
-suddenly fails.
+**DONE, 2026-09-06.** The scheduler was already per-group - `buckets` is a Map keyed by group with
+its own control/welcome/message tiers - so the capability was one method away rather than a
+redesign: `isGroupIdle` / `waitUntilGroupIdle`, woken after EVERY frame instead of only at the end of
+a drain, and `answerAfterMailboxDrained` now takes the group it is answering about. Three details
+carry the correctness: a frame that has been PICKED is out of its bucket and not yet applied, so the
+drain records which group it is inside; the UNTAGGED bucket is waited for too, because nothing in
+the scheduler can say whose an untagged frame is; and a handler that throws still clears the marker,
+or that group would never read idle again. Five tests on the barrier, one per claim.
+
+**The cost stays visible either way**: `reachedInMs` is recorded on every reading, so a repair that
+starts taking longer shows up as a number in the ledger instead of as a row that suddenly fails.
 
 ### P3 - a browser report has no notion of a FOREIGN origin, so every row that logs in reads the identity provider's console as the application's (measured 2026-09-05)
 
@@ -2020,8 +2028,26 @@ checkpoint flush", deliberately, so the cursor never runs ahead of the persisted
 that ends before that flush keeps the accusation and loses the record of having made it**, which is
 exactly what five cold starts manufacture.
 
-Two things are owed before a fix: whether the thunk is reached at all on these runs, and where the
-duplicate delivery that reaches the decryptor comes from - `[QUEUE] delivery ... arrived twice`
+**THE SECOND HALF IS ANSWERED AND FIXED, 2026-09-06.** The duplicate delivery is gone and its cause
+was not subtle once the population named it - the race is SCHEDULED, not incidental. `onDrainEnd`
+acknowledges the rows it just drained with a `void`ed `ackMessages(ackIds)`, and then, in the SAME
+TICK, `refetchFramesLeftBehind` calls `void this.fetchPendingMessages()` whenever a Welcome landed.
+The server has not recorded the ack yet, so it lists those rows again and the device meets its own
+frames a second time. **`HEAL-NEW-1` is what made it certain**: an equally empty store, the same
+pull, and no duplicate - because nothing was online to deliver anything, so there was no drain, no
+ack and no re-fetch.
+
+The fix deletes the overlap rather than tolerating it, which is what WP-DUPDELIVERY-1 did to the
+mirror-image race in 2026-08: every ack now goes through `announceAck`, which chains them and
+publishes `ackInFlight`, and `fetchPendingMessages` awaits it before pulling. **Fire-and-forget was
+never the problem and is kept** - a drain must not wait on a round trip - it was fire-and-forget
+*unannounced*. A FAILED ack deliberately does not hold the pull: the server really does still hold
+those rows, so a pull that lists them again is telling the truth. Asserted in
+`BaseMlsService.ackBarrier.test.ts` on the ORDER rather than on a count, since a count would pass on
+a sleep.
+
+One thing is still owed on the FIRST half: whether the thunk is reached at all on these runs -
+`[QUEUE] delivery ... arrived twice`
 (**seen four times on 2026-09-05, and the three new ones narrow it**: TAB-3b, then HEAL-REVOKE-9 and
 HEAL-REVOKE-2 on a device that had just been WIPED and logged back in, then HEAL-REVOKE-3 on a device
 FRESHLY MINTED and never revoked at all. So it is not the tab-leadership path TAB-3b exercises - one
@@ -2034,6 +2060,132 @@ honestly, and a defect costing three cells is easier to justify fixing than one 
 recognises one class of duplicate and acknowledges it without decrypting, so this one took a
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
+
+### P1 - the request travels on a channel epochs cannot break and the ANSWER does not, so a device that repairs itself by joining can never read the reply (measured 2026-09-06 on the gateway and the delivery service)
+
+HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device never
+gets them. **It is not a delay, not a timer, and not a delivery failure** - the first two readings of
+this said "314 seconds" and "never routed", and both were wrong. What is true is worse and simpler.
+
+WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end:
+
+```
+00:00:37  [SEND][send-feb0c374] START  sender=<W1>  isCommit=false
+00:00:37  [SEND][send-feb0c374] QUEUED count=1
+00:00:37  [SEND][send-feb0c374] recipient=<the returned device>  online=true  queuedId=cdabf481
+00:00:37  [SEND][send-feb0c374] PUBLISHED recipient=<the returned device>
+00:00:37  [SEND][send-feb0c374] DONE queued=1 realtime=1
+```
+
+**It was delivered, live, in the same second, to a device the server knew was online.** The gateway
+agrees: exactly one `kind=mls` frame to that device for that group. Six seconds later the device
+logs `27a8f5bf holds 4 frame(s) it can never read`. **The answer arrived and could not be decrypted.**
+
+**THE TWO LEGS OF ONE EXCHANGE TRAVEL ON DIFFERENT CHANNELS, AND ONLY ONE OF THEM SURVIVES AN EPOCH
+CHANGE.** The same second, from the same log:
+
+```
+[COMMIT] base published with the commit group=GRP epoch=2      <- the joiner CREATED epoch 2
+[MEMBERSHIP_ACTIVE] device=<the returned device>
+[HISTORY_REQ] FORWARDED target=<W1> requester=<the returned device>   <- kind=CONTROL, device-addressed
+[SEND] sender=<W1> ...                                                <- kind=MLS, group, epoch-bound
+```
+
+The device rejoins by EXTERNAL COMMIT, which advances the group to epoch 2. Its solicitation reaches
+W1 as a `control` frame - addressed to a device, carried outside the group, immune to all of this.
+W1's answer goes back as an ordinary MLS group message. If W1 has not yet applied the commit that
+created epoch 2 - and it has had milliseconds - it encrypts at epoch 1, and **a device that joined AT
+epoch 2 holds no epoch-1 secrets and never will**. The reply is unreadable by construction, not by
+accident, and the window is the width of one commit's propagation.
+
+**NOTHING RETRIES, so the exchange simply dies.** The device sits holding four frames it cannot read
+and an answer it will never decrypt. In the campaign it looks like a 300 s delay only because the
+harness reloads the page when its budget expires, and the reconnect starts a fresh exchange at the
+current epoch - which then works instantly. **In a real session the reconnect may be minutes, hours,
+or never.**
+
+**THE FIX IS THE ASYMMETRY, and the request leg already shows what right looks like.** An answer to a
+device-addressed solicitation should not be sent as group ciphertext at whatever epoch the responder
+happens to hold: either it travels `control` as the request does, or the responder applies pending
+commits for that group before answering. **Anything that keeps the answer epoch-bound keeps the
+defect**, because the responder cannot know it is behind at the moment it replies.
+
+  READ WITH THE FOUR FIXED ON 2026-09-05, which are the same family: an answer that arrives before
+  the asker can receive it. Those four were about the WAITER not being there; this one is about the
+  answer being unreadable when it lands, which no amount of waiting fixes.
+
+**WHY IT TOOK THREE READINGS.** The ack barrier and the exclusion-reason bug were both suspected,
+both fixed, and neither moved the number - and it was that second failure to move it that forced the
+reading off the client and onto the gateway, where the "300 s" turned out to be the instrument's own
+budget. **A number reproduced four times looked like a product constant and was a harness's.**
+
+### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
+
+The row makes a group unknown by restoring an MLS blob that predates the join. On `60432d09` the
+restore is immediately undone: `digest after restore` and `digest after reload` differ, which is
+exactly the discriminator the runner already carries - **the live app checkpointed its in-memory
+state back over the restored blob before the reload**. `brokeForReal: false`, so it records
+`SETUP-FAILED` and asserts nothing downstream. That refusal is correct and is not the work.
+
+**THE WORK IS ARRANGING FOR NOTHING TO BE EXECUTING BETWEEN THE RESTORE AND THE LOAD**, and the two
+obvious ways do not survive contact:
+
+- park the page on `about:blank` first - the origin changes, so `mlsdb.mjs` can no longer reach the
+  `localhost:8081` IndexedDB it has to write;
+- `Emulation.setScriptExecutionDisabled` - freezes the page's own scripts, but the restore tool
+  drives the same page through `Runtime.evaluate`, which it would also be freezing.
+
+A same-origin document that boots no app (a static text path) is the shape that satisfies both
+constraints, and whether IndexedDB is scriptable from one is the thing to measure before writing it.
+
+**AND A SECOND, INDEPENDENT GAP IN THE SAME ROW**: `markerReason: UNRESOLVED GROUP ID` - the runner
+could not map the group NAME to its uuid, so the awaiting-history marker could not be read for the
+group under test even if the break had taken. Two fixes, not one, and neither is the app.
+
+### P2 - four HEAL-NEW rows watch a responder heal a device that no longer needs one, and the rung has to be redesigned around a group the device cannot self-serve (measured 2026-09-06)
+
+`HEAL-NEW-11`, `-12` and `-15` were written for a product where a fresh device sat AMBER until some
+member served it. They wait up to 90 s for an "amber alone" state, then start the responder, then
+watch it heal. On `c643a411` that state never arrives:
+
+```
+ 11 749ms  the client is LIVE on /chat - the mint hands over
+102 008ms  never went amber alone within 90s: rows 36, ready 36, syncing 0   (+90 114ms)
+102 008ms  starting the late responder w1
+133 992ms  watching the sidebar ...  settled (+3ms)
+```
+
+**HEAL-NEW-1 is the measurement that explains it, and it is a PASS**: with the phone force-stopped,
+both browsers down and the GATEWAY confirming `extra: []`, a fresh device reaches **36 of 36 ready in
+8.0 s**. It serves itself through the external-join seam - `roster seat with NO queued Welcome and NO
+add in flight - nobody owes us anything; serving ourselves`. **A device holding a roster seat does
+not need a responder**, so a rung built on watching one arrive has nothing left to watch.
+
+  THE LATE WATCH IS A SYMPTOM, NOT THE FAULT, and this matters because the runner already carries a
+  comment about having fixed a 49 s lateness by moving work below the watch. It is 122-166 s now, and
+  every extra second of it is the 90 s amber poll plus the responder boot that the dead premise makes
+  the row wait for. Fixing the arming point would not make these rows observable; it would only make
+  them fail faster.
+
+**WHAT WOULD MAKE THE QUESTION ASKABLE AGAIN is a group the device CANNOT let itself into** - one it
+is owed a Welcome for rather than one it holds a seat in. The product distinguishes them in its own
+log (`already in tree for <id> - skip (will join via queued Welcome)` against the self-service line
+above), so the discriminator exists; what does not exist is a fixture that puts the subject in that
+state deliberately. That is the piece of work, and it is a rung redesign rather than a row edit.
+**Deliberately NOT rescued with a second probe**: `healnew.mjs` says `never a PASS over an unasked
+question, and never a second probe invented to rescue it`, and clicking a healed sidebar to report a
+number would be exactly that.
+
+**A SEPARATE AND SMALLER RIG DEFECT SITS UNDER `HEAL-NEW-2`**, which is `INVALID` on `W2 shares no
+group with this device's 0 row(s)`. The subset is `splitBySubset(before.tiles, ids)` with
+`before = await sidebar(cx)` read moments after the mint hands over - `rows: 0, tiles: []` - so the
+question *which of my rows can this responder serve* is asked of a device that has none yet and can
+only answer "none". **HEAL-NEW-12 is the control that proves it is an ordering fault and not the
+account's membership**: same computation, same peer, **4 of 36 rows in the subset**, because a LATE
+responder is measured after the device has enumerated. The subset must be taken against what the
+device is OWED - the server's active list, which the runner already reads as `server.active` - never
+against tiles rendered at an instant. That one IS a row edit, and it is owed before HEAL-NEW-2 can
+have a verdict at all.
 
 ### P2 - the leader tab does not render a message the follower tab sent, until it re-reads (measured 2026-09-05)
 
@@ -2320,6 +2472,33 @@ reading the run's stdout. Nothing here is wrong, but a HEAL-NEW verdict says "cl
 client", never "clean on the server".
 
 ### P1 - a device asks for a Welcome for ever, and the member that answers RESETS the row that would have let it heal itself (measured on prod 2026-09-01)
+
+**SEEN AGAIN ON THE LOCAL ESTATE, 2026-09-06 01:03** - the first sighting outside production, and it
+is the only line of dirt on an otherwise clean HEAL-REVOKE-5: `[KICK] Stale leaf <the phone> removed
+from ba048e26…` on W1. That is the documented answer - a `welcome_request` for a group whose leaf is
+already in the tree is kicked and re-added - so the line is W1 behaving correctly and the phone
+asking for something it should not need. **The prod measurement this entry is waiting for now has a
+local reproduction to be taken against**, which is cheaper to instrument and does not need a
+production window.
+
+**AND IT HAS A COST NOBODY HAD PRICED, MEASURED ON HEAL-REVOKE-8 THE SAME NIGHT.** In one run, in
+one group, thirteen seconds apart:
+
+```
+01:15:09  [KICK] Stale leaf <the phone> removed from d4dc24a2...
+01:15:22  [HISTORY_RECONCILE] d4dc24a2... still holds frames it cannot read
+          while <the same phone> answers nothing - electing somebody else
+```
+
+**A device whose leaf has just been kicked cannot answer a history solicitation for that group**,
+and the server's responder election is RANDOM among the members it sees online. So every group
+this loop touches carries a member that is elected like any other and is silently a dead end. That
+is not a second defect - it is this one's blast radius, and it explains why the history exchange
+looked intermittent rather than broken: the run's outcome depended on which member the dice named.
+**The escalation shipped on 2026-09-06 rotates past a silent responder, so the repair no longer
+depends on the election being lucky** - which is the right architecture regardless, since no client
+may assume a particular peer answers. It does NOT close this entry: a dead responder is still a
+member losing its seat, and the wasted round trip is real.
 
 > **A FIFTH HALF WAS FOUND ON 2026-09-04 AND FIXED THE SAME DAY, AND IT IS THE ONE THAT MADE THE
 > OTHER FOUR UNREACHABLE FOR PART OF THE POPULATION.** Everything above negotiates what a `pending`

@@ -13,6 +13,32 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device acknowledged a batch of messages and then immediately asked the server for them
+  again**, because the ack was fire-and-forget and the pull that followed it in the SAME TICK had no
+  way to wait. `onDrainEnd` ACKs the rows it just drained and then calls `refetchFramesLeftBehind`,
+  which starts a pull whenever a Welcome landed; the server has not recorded the ack yet, so it
+  hands the same rows back and the device meets its own frames a second time -
+  `[QUEUE] delivery ... arrived twice - the pull listed a row this device had already acknowledged`.
+  It cost a round trip and a wasted decrypt attempt on every catch-up, and it was the only remaining
+  dirt on four campaign rows. **The population is what named the cause**: it appeared on every row
+  where an EMPTY store drains a backlog, and not on the one row whose store is equally empty but has
+  nobody online to deliver anything - so no drain, no ack, no re-fetch. Every ack now goes through
+  one seam that chains them and publishes an `ackInFlight` promise, and the pull awaits it. Ack sites
+  stay fire-and-forget, which was never the problem - being fire-and-forget *unannounced* was. A
+  failed ack deliberately does not hold the pull: the server really does still hold those rows, so a
+  pull that lists them again is telling the truth.
+
+- **A device coming back to a busy account got its missing messages three minutes late, because a
+  digest waited for the whole account instead of the conversation it describes.** The leg that
+  describes a store for ONE group waited on `waitForMessageQueueIdle`, which is idle only when the
+  device has applied EVERYTHING - and a device rejoining twenty-nine conversations takes minutes to
+  get there. Measured: a peer asked at 23:47:34 and was answered at 23:50:43, 189 s later. Frames
+  for the other twenty-eight conversations cannot change this group's manifest. The scheduler was
+  already per-group, so the barrier is now scoped to one: it wakes after every frame rather than at
+  the end of a drain, counts the untagged bucket (nothing there can say whose an untagged frame is),
+  refuses to resolve while the drain is inside a frame of that group, and clears its marker even
+  when a handler throws.
+
 - **The history election has never been able to skip a member, because the cap on a member key was
   shorter than every key this platform issues.** `notifyHistoryRequest` filtered the exclusion list
   with `k.length <= 128`. A member key is `userId:deviceId`, where the user id is a 64-character hex

@@ -51,10 +51,12 @@ import { finishObserved, record, unmet } from "../results.mjs";
 import { splitBySubset, subsetSettled } from "./servable.mjs";
 import { activeGroupIds, amberListCost, cut, navigationCost, readAll, sidebar, whoAmI, watch as watchRows } from "./syncrows.mjs";
 import {
+  BLOCK_LIST_READ_NARRATION,
   DEVICE_PANEL_NARRATION,
   ignoringExpectedLog,
   ignoringExpectedRefusal,
   MINT_REFUSALS,
+  NO_LOCAL_STATE_NARRATION,
   OIDC_LOGIN_NARRATION,
   report,
 } from "../watch.mjs";
@@ -82,6 +84,26 @@ import {
  * `[DevicePanel] Deleted` is somebody's device disappearing. Widening `BENIGN` would silence them
  * for the forty-eight checks where they would be the finding.
  *
+ * THE FOURTH LIST WAS MISSING FOR THE WHOLE RUNG AND COST HEAL-NEW-1 A `PASS`, 2026-09-06.
+ * `NO_LOCAL_STATE_NARRATION` already held this row's dirt verbatim -
+ * `[PENDING] Group <id> absent locally -> recovery requested`, twenty-three of them - and its own
+ * comment in `watch.mjs` says what it is for: lines that are about **holding no MLS state, which
+ * a wiped device and a fresh mint are equally**. `healrevoke.mjs` names it; this file, whose
+ * entire subject is a device that holds nothing, did not. So every HEAL-NEW row was `PASS-DIRTY`
+ * on its own premise working - the recovery seam being asked for each group is the MECHANISM,
+ * and it is the observation that says the seam ran at all.
+ *
+ * THE FIFTH IS `BLOCK_LIST_READ_NARRATION`, MISSING FOR THE SAME REASON AND FOUND THE SAME WAY -
+ * it was the ONE line left after the fourth was named. `healrevoke.mjs`, `pinrows.mjs` and
+ * `mention.mjs` all name it; its own comment says why it can be named anywhere at all: it is a
+ * bare function-entry tag with no payload, emitted wherever a view reading the block list mounts,
+ * and `CLAUDE.md` MANDATES a log at function entry. A rule that counted one as dirt would be
+ * asking the code to break this project's own standard.
+ *
+ * IT IS STILL A CALLER'S ACT AND STILL NARROW: the filter is applied to `report(w3)` alone, the
+ * freshly minted device. On W1 or W2 the same line is a device that LOST a group, which is a
+ * finding, and nothing here forgives it there.
+ *
  * THE ORDER IS LOAD-BEARING, for the reason DEL-2 records: `ignoringExpectedLog` recomputes `clean`
  * over `badHttp` AS IT FINDS IT, so the refresh `401` has to be forgiven first or the whole run
  * stays dirty on a request that was already explained.
@@ -90,6 +112,8 @@ const withoutTheMintsOwnNoise = (rep) =>
   ignoringExpectedLog(ignoringExpectedRefusal(rep, MINT_REFUSALS), [
     ...OIDC_LOGIN_NARRATION,
     ...DEVICE_PANEL_NARRATION,
+    ...NO_LOCAL_STATE_NARRATION,
+    ...BLOCK_LIST_READ_NARRATION,
   ]);
 
 const argv = process.argv.slice(2);
@@ -585,7 +609,27 @@ if (row.expect === "servableSubset") {
   const rwho = await whoAmI(rcx);
   const groups = await activeGroupIds(rcx, rwho.userId ?? "");
   rcx.close();
-  const before = await sidebar(cx);
+  // THE SUBJECT'S HALF IS WHAT IT IS OWED, NOT WHAT IT HAS DRAWN YET, and reading the sidebar here
+  // is what made HEAL-NEW-2 `INVALID` on 2026-09-06 with `shares no group with this device's 0
+  // row(s)`. For a responder online FROM THE START this runs moments after the mint hands over, when
+  // the device has `rows: 0, tiles: []` - so the intersection is empty whatever the account looks
+  // like, and the row can only ever refuse itself.
+  //
+  // HEAL-NEW-12 IS THE CONTROL THAT SAYS IT IS AN ORDERING FAULT AND NOT THE ACCOUNT: the same
+  // computation against the same peer found 4 rows of 36, because a LATE responder is measured after
+  // the device has enumerated. One reading is early, the other is not; nothing about the membership
+  // differs.
+  //
+  // `activeGroupIds` ASKS THE SERVER (`/api/mls/users/:id/groups`), so it answers the same before
+  // the first tile is painted as after the last - which is what makes this deterministic rather than
+  // a race the row wins on some runs. The responder's half is still read from the responder's own
+  // client at the moment it is in place, for the reason above it: that is when it is true.
+  const ourWho = await whoAmI(cx);
+  const owed = await activeGroupIds(cx, ourWho.userId ?? "");
+  if (owed.ids === null) {
+    await invalid(`the row scopes its claim to what this device is owed and the server refused to say: ${owed.why}`);
+  }
+  const before = { rows: owed.ids.length, tiles: owed.ids.map((id) => ({ id })) };
   const ids = new Set(groups.ids ?? []);
   // ONE DEFINITION OF THE SUBSET, shared with the termination proof below and with its self-test.
   // Splitting here and re-filtering there is how the two would drift apart, and only one of them
@@ -745,6 +789,40 @@ if (row.usability && !(amberList?.clicked === true)) {
   );
 }
 
+/**
+ * AND THE SAME REFUSAL FOR EVERY `late` ROW, which is the paragraph above applied where it was not.
+ *
+ * `wentAmberBeforeTheResponderArrived` was an EXPECTATION, so rows 11 and 12 recorded `FAIL` for the
+ * identical condition row 15 records `INVALID` for - the amber-alone window never opening. A `FAIL`
+ * on the board is read as "the product is wrong", and here the product is right: the row's premise
+ * is that a fresh device sits amber until somebody serves it, and it no longer does.
+ *
+ * MEASURED 2026-09-06, AND THE EVIDENCE IS ANOTHER ROW'S PASS. HEAL-NEW-1 reaches 36 of 36 ready in
+ * 8.0 s with the phone force-stopped, both browsers down, and the GATEWAY confirming `extra: []` -
+ * the device lets itself in through the external-join seam because it holds a roster seat and
+ * nobody owes it anything. There is no window left for a late responder to be watched arriving into,
+ * on any row, so the whole `late` family is unobservable until the rung is rebuilt around a group
+ * the subject CANNOT self-serve.
+ *
+ * REFUSING IS NOT THE SAME AS PASSING, and this is deliberately not a re-scope: nothing here waives
+ * the question or invents a weaker one to answer instead. `healed` and the whole settle are recorded
+ * in the detail, and no expectation reads them.
+ */
+if (row.at === "late" && !(wentAmber?.what ?? "").startsWith("amber alone")) {
+  await invalid(
+    `the device never sat amber alone, so the responder this row watches arrive had nothing left to serve - ${wentAmber?.what ?? "(no amber mark)"}`,
+    {
+      wentAmber,
+      watchOpenedAfterLiveMs,
+      healed,
+      settledInMs: w.settled ? w.elapsedMs : null,
+      stalledForMs: w.settled ? null : w.elapsedMs,
+      lateFleet,
+      servable,
+    },
+  );
+}
+
 const last = await readAll(cx);
 note(`last read ${JSON.stringify(last)}`);
 
@@ -790,10 +868,8 @@ if (row.responder === "w1" && row.at === "start")
   expectations.ourOwnDeviceWasInTheFleet = fleet.readable === true && fleet.extra.length > 0;
 if (row.responder === "w2")
   expectations.noOwnDeviceCouldHaveAnswered = fleet.readable === true && fleet.extra.length === 0;
-if (row.at === "late")
-  expectations.wentAmberBeforeTheResponderArrived = (wentAmber?.what ?? "").startsWith(
-    "amber alone",
-  );
+// `wentAmberBeforeTheResponderArrived` USED TO LIVE HERE and is now the `invalid` above: the
+// condition is a premise this rig can no longer establish, not a claim the product failed.
 if (row.responder === "w1" && row.at === "late")
   expectations.ourOwnDeviceArrivedLate = lateFleet?.readable === true && lateFleet.extra.length > 0;
 /**

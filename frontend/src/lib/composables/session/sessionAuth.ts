@@ -1184,7 +1184,7 @@ export async function loginImpl(ctx: SessionContext, cb: ChatSessionCallbacks): 
         // claim agreement it does not have yet, which ends the exchange with the two still apart.
         // Deferred rather than awaited for the same reason as every other leg: whether this
         // callback runs inside the drain is not something this call site should have to know.
-        answerAfterMailboxDrained(ctx.ensureMls(), async () => {
+        answerAfterMailboxDrained(ctx.ensureMls(), groupId, async () => {
           try {
             await handleHistoryRequest({
               mlsService: ctx.ensureMls(),

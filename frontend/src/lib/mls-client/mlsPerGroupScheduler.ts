@@ -81,6 +81,19 @@ export class MlsPerGroupScheduler {
   private isDraining = false;
   private readonly pendingWelcomeGroups = new Map<string, MlsQueuedMessage[]>();
   private readonly queueIdleWaiters: Array<() => void> = [];
+
+  /**
+   * The bucket the drain is applying RIGHT NOW, or `null` between frames.
+   *
+   * Only {@link isGroupIdle} reads it, and it is the difference between "this group has nothing
+   * queued" and "this group has nothing left" - a frame that has been picked is out of its bucket
+   * and not yet applied, so a group-scoped barrier that looked only at the buckets would resolve in
+   * the middle of the one message it was waiting for.
+   */
+  private currentGroupKey: string | null = null;
+
+  /** Waiters for ONE group's queue, by bucket key. See {@link waitUntilGroupIdle}. */
+  private readonly groupIdleWaiters = new Map<string, Array<() => void>>();
   private mlsLock: Promise<void> = Promise.resolve();
 
   /**
@@ -190,6 +203,64 @@ export class MlsPerGroupScheduler {
     return new Promise((resolve) => {
       this.queueIdleWaiters.push(resolve);
     });
+  }
+
+  /**
+   * Nothing left to apply FOR ONE GROUP: its buckets are empty, nothing of its is parked behind a
+   * Welcome, and the drain is not in the middle of one of its frames.
+   *
+   * **THE ORPHAN BUCKET COUNTS TOO, and that is deliberate.** A frame the server did not tag with a
+   * group lands in {@link MLS_QUEUE_ORPHAN_KEY}, and this class cannot know whether it belongs to
+   * the group being asked about. Waiting for it keeps the answer honest at the cost of one bucket
+   * that is normally empty - where ignoring it would make this barrier claim a completeness it
+   * cannot see.
+   */
+  isGroupIdle(groupId: string): boolean {
+    if (this.currentGroupKey === groupId || this.currentGroupKey === MLS_QUEUE_ORPHAN_KEY) {
+      return false;
+    }
+    for (const key of [groupId, MLS_QUEUE_ORPHAN_KEY]) {
+      const b = this.buckets.get(key);
+      if (b && b.control.length + b.welcome.length + b.messages.length > 0) return false;
+      if ((this.pendingWelcomeGroups.get(key)?.length ?? 0) > 0) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Resolves when {@link isGroupIdle} holds for this group.
+   *
+   * **WHY IT EXISTS RATHER THAN {@link waitUntilIdle}.** The whole-mailbox barrier answers "have I
+   * applied EVERYTHING", which is what a device sending a re-encrypted bundle needs and is
+   * proportional to the size of the account. A device describing its store for ONE conversation
+   * needs a different fact - frames for twenty-eight other conversations cannot change this group's
+   * manifest. Measured 2026-09-05: a device rejoining twenty-nine groups took **189 seconds** to
+   * reach whole-mailbox idle, and answered a digest that long after it was asked; the messages
+   * arrived, three minutes late, on a repair that had already been fixed twice that evening.
+   */
+  waitUntilGroupIdle(groupId: string): Promise<void> {
+    if (this.isGroupIdle(groupId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = this.groupIdleWaiters.get(groupId) ?? [];
+      waiters.push(resolve);
+      this.groupIdleWaiters.set(groupId, waiters);
+    });
+  }
+
+  /**
+   * Wakes every group waiter whose group has gone idle.
+   *
+   * Called after each frame rather than only at the end of a drain, which is the point: a group's
+   * work is usually finished long before the account's is.
+   */
+  private notifyGroupIdle(): void {
+    // Iterated live rather than over a copy: the only entry deleted is the one being visited, which
+    // a Map iterator handles by definition.
+    for (const [groupId, waiters] of this.groupIdleWaiters) {
+      if (!this.isGroupIdle(groupId)) continue;
+      this.groupIdleWaiters.delete(groupId);
+      for (const resolve of waiters) resolve();
+    }
   }
 
   /**
@@ -328,6 +399,10 @@ export class MlsPerGroupScheduler {
         if (!picked) break;
 
         const { msg } = picked;
+        // OUT OF ITS BUCKET AND NOT YET APPLIED - the one window a group-scoped barrier would
+        // otherwise resolve in. Cleared in the `finally` below so a handler that throws does not
+        // leave the group permanently un-idle.
+        this.currentGroupKey = picked.key;
         const where = `group=${msg.groupId ?? 'unknown'}${msg.queuedMessageId ? ` qId=${msg.queuedMessageId}` : ''}`;
         // Welcome messages self-manage the MLS lock: their handler runs the network
         // preamble (terminal-group resolution, recovery checks) unlocked and only holds the
@@ -354,6 +429,12 @@ export class MlsPerGroupScheduler {
           }
         }
 
+        this.currentGroupKey = null;
+        // AFTER EVERY FRAME, not only at the end of the drain: a group's own work is usually
+        // finished long before the account's is, and that difference was three minutes on a device
+        // rejoining twenty-nine conversations.
+        this.notifyGroupIdle();
+
         if (this.getPendingCount() > 0) {
           await this.guarded('yieldToMainThread', () => yieldToMainThread());
         }
@@ -370,7 +451,11 @@ export class MlsPerGroupScheduler {
       }
       this.releaseStrandedWelcomeBuffers();
       this.isDraining = false;
+      // A FRAME THAT THREW LEFT THIS SET, and a group whose key stayed here would never read idle
+      // again. The loop clears it on the ordinary path; this is the one for everything else.
+      this.currentGroupKey = null;
       this.notifyIdle();
+      this.notifyGroupIdle();
       console.log('[QUEUE] Drain complete');
     }
   }
