@@ -6072,3 +6072,66 @@ Three things must be settled BEFORE writing checks:
 
 **The eleven emoji rows belong to this campaign** - they are listed in the bundled-emoji-font
 entry above, which is their only copy.
+
+## THE DELIVERY CHAIN REVIEW - opened by the 2026-09-06 outage, agreed with the user the same night
+
+*"C'est peut-etre pour ca qu'apres la resolution rapide de ce probleme, il faut qu'on revoie le
+workflow"* (user, 2026-09-06), after an earlier exchange in which the complaint was READABILITY -
+*"C'est pas un peu alambique tout ces workflows ?"*. The outage turned that into five items that are
+DEMONSTRATED rather than argued. Ordered by value, which is not the order they were noticed in.
+
+**1. THERE IS NO ROLLBACK, AND THE ONE ATTEMPTED WAS GREEN WHILE DOING NOTHING.** P1.
+`infrastructure/docker-compose.prod.yml` names its images `:latest`, so what production runs is
+decided entirely by what that tag points at when `docker pull` runs. Re-running v0.16.1's
+`Deploy to Production Server` on 2026-09-06 passed **twenty steps**, authenticated to GHCR, migrated,
+health-checked, and redeployed **v0.16.4** - because `latest` is v0.16.4. A version can be shipped
+and cannot be unshipped. The pipeline ALREADY pushes an immutable `v${version}` tag
+(`deploy.yml`, `type=raw,value=v${{ inputs.version }}`); deploying by it would make re-running an old
+job a real rollback, which is the shape everybody already assumes it has.
+
+**2. A DEPLOYED ESTATE IS NOT ASKED WHETHER IT WORKS.** P1, and it is what let this reach users.
+The release run was green, `canari-emse.fr` and `dev.canari-emse.fr` both answered `HTTP 200`, and
+every login was refused. `CLAUDE.md` already says a green deploy proves the containers started and
+never that the site answers; **answering does not prove it works either**.
+`tools/cross-client-harness/deployed-wasm-check.mjs` was written during the incident and refuses an
+estate serving a wasm that can panic - it named `mls_wasm_bg.YXThuGSF.wasm` on production, the exact
+file in the user's stack trace, with no credentials and in seconds. It belongs after the dev deploy,
+where it would have stopped this build before production. It is NOT a login and must not be sold as
+one; the honest check is a real sign-in on the deployed build, and no campaign row does that.
+
+**3. NOTHING REPORTS THAT PRODUCTION DID NOT MOVE.** P2, sibling of the open "nothing tells anybody
+prod is down". `Production estate` needs `[android, ios]` in success - deliberately, and the reason
+is good: production must not serve a version a store has just refused. But a store arm failed on
+v0.16.2 AND v0.16.3, so both were published, announced, and served to nobody. **Production ran
+v0.16.1 from 2026-09-03 until this outage**, and the only reason anybody found out is that the next
+deploy broke. The `prod-released` marker already answers the question exactly; a release whose marker
+did not move is a release that did not ship, and that should be loud.
+
+**4. THE EMERGENCY PATH SHORTENS NOTHING.** P2, measured under real urgency. `gh pr merge --admin`
+skips the ruleset's required check on the PULL REQUEST; `release-preflight.sh` gate 3 then refuses
+the release because `CI passed` never ran on the commit - and the wait is for the same CI, later,
+after a failed release run. The bypass bought zero minutes and cost one refused run. Either write
+that down where somebody reaching for it will read it, or build a short path that is actually short.
+
+**5. THE RUN VIEW MISLEADS, WHICH IS WHERE THIS STARTED.** P3. `deploy.yml` is called twice with a
+`phase` input and every job inside carries `if: inputs.phase == ...`, so the two calls contribute
+identically-named jobs and half of them are `skipped` for reasons the names do not carry - the user
+read `Production estate / Deploy to dev.canari-emse.fr: skipped` and could not tell which skip was
+normal. The cheap fix is naming the jobs by phase. The deeper one is a composite action under
+`.github/actions/` with one small library workflow per target, which costs NOTHING in the Actions
+list the user wants kept short - that constraint is about VISIBLE workflows, and libraries have no
+triggers.
+
+**AND THE CONSTRAINT THAT SHAPED ALL OF IT, WHICH IS NOT TO BE RELITIGATED.** *"le moins de workflows
+differents possibles, ca inonde la console github"*. The complexity did not appear from nowhere: it
+moved from many files into few files with phases. Any proposal here must keep four visible workflows.
+
+**6. AUTO-MERGE STAYS ARMED DURING AN INCIDENT, AND IT NEARLY UNDID THE FIX.** P2, and it was luck
+rather than design that it did not. While production was down, PR #397 - which edits
+`mls-core/src/state.rs`, the file the hotfix was changing - merged itself on schedule. It landed
+BEFORE the hotfix, so the hotfix squashed on top and both guards survived; had the order been the
+other way round, a green auto-merge would have silently reverted a `cfg` that was holding every web
+login up, and nothing in the chain would have said so. The verification that caught it was a hand
+`grep` of `origin/main` after the fact. **Either arming is suspended while an incident is open, or a
+pull request touching a file the in-flight fix touches is held** - and the second needs no human
+switch, which makes it the better one.
