@@ -29,7 +29,6 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
     deviceId: 'web-u-new',
     delivery: { userId: '', deviceId: '' },
     freshStart: false,
-    lastKnownState: undefined,
     resolveDeviceId: vi.fn().mockResolvedValue('web-u-new'),
     loadStateWithKey: vi.fn().mockResolvedValue(undefined),
     classifyStateLoadFailure: WebMlsService.prototype['classifyStateLoadFailure'],

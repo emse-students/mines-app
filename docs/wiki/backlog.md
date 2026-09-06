@@ -2223,13 +2223,19 @@ persister), `persistMlsStateAfterMutation`, and the key-package publication path
 write; a device performing a mass join runs all three within seconds of each other, and two captures
 in flight at once is what the version compares.
 
-**IT IS OFF BY EXACTLY ONE, AND IT MISSES SOME RUNS.** Measured across four runs on 2026-09-06:
-`v110 < v111` (HEAL-REVOKE-5), `v133 < v134` (-8), `v134 < v135` (-2), and **nothing at all on -3**,
-which is `PASS` with all four observers clean. So it is a race and not a fixed sequence - three runs
-in four, always exactly ONE occurrence, always on an observer that MINTS a device, never on the
-victim or the actor. **Off by one means exactly TWO captures in flight and adjacent**, not a storm,
-which is why the pair of call sites can be named rather than hunted: the persister serialises itself,
-so the other one is the writer that does not go through it (the entry above).
+**IT IS OFF BY EXACTLY ONE, AND IT MISSES SOME RUNS.** Measured across five runs on 2026-09-06:
+`v110 < v111` (HEAL-REVOKE-5), `v133 < v134` (-8), `v134 < v135` (-2), `v199 < v200` (-9), and
+**nothing at all on -3**, which is `PASS` with all four observers clean. So it is a race and not a
+fixed sequence: four runs in five, always exactly ONE occurrence.
+
+**IT IS NOT TIED TO MINTING, WHICH A FIRST READING OF THREE RUNS SAID IT WAS.** On -5, -8 and -2 it
+fell on an observer that mints a device; on -9 it is the VICTIM, a device coming back from a deferred
+wipe. What those have in common is a client ENUMERATING a large number of groups at once, which is
+the situation that puts a key-package publication beside a persister flush - and it is the observers
+doing nothing of the kind (the actor, every time) that never carry it. **Off by one means exactly
+TWO captures in flight and adjacent**, not a storm, which is why the pair of call sites can be named
+rather than hunted: the persister serialises itself, so the other one is the writer that does not go
+through it (the entry above).
 
 **SERIALISING THE WRITES WOULD BE WRONG, and that is why this is filed rather than fixed.** Chaining
 them makes the OLDER capture land first and be overwritten - two writes where one is needed, and a
