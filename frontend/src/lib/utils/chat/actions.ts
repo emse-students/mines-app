@@ -24,7 +24,8 @@ import {
 } from '$lib/utils/chat/historyDigestRendezvous';
 import { answerHistoryDigest, stateOurCoverage } from '$lib/utils/chat/historyDiffAnswer';
 import { pendingGroupExitIds } from '$lib/utils/chat/pendingGroupExits';
-import { resolveDirectPeerId, retireConversation } from '$lib/utils/chat/conversations';
+import { ensureConversationForServerGroup } from '$lib/utils/chat/serverGroupConversation';
+import { retireConversation } from '$lib/utils/chat/conversations';
 import {
   classifyServerStatus,
   decideAbsentGroupFate,
@@ -564,25 +565,11 @@ export async function discoverMissingGroups(params: {
   // (soft-deleted tombstones are skipped via activeServerGroups above).
   const localGroupIds = new Set([...conversations.values()].map((c) => c.id));
 
-  // A GROUP THIS DEVICE HAS ALREADY DECIDED TO LEAVE IS NOT "MISSING LOCALLY", IT IS ON ITS WAY OUT.
-  // Without this, DEL-10's group came back: the delete met no server, the local state was purged,
-  // and the very next discovery saw a server group with no local row and helpfully re-created it as
-  // a placeholder - so the user's deletion was undone by the reconciler that is supposed to serve
-  // it. The owed-exit row is the only thing that can tell the two apart, because on the wire they
-  // are identical: a server group this client does not have.
+  // Read ONCE for the whole sweep and handed to the seam below, which owns the guard: a group this
+  // device has already decided to leave is not "missing locally", it is on its way out
+  // ({@link ensureConversationForServerGroup}). The question is per group, the round trip is not.
   const owedExits = await pendingGroupExitIds(params.storage);
-  const missing = activeServerGroups.filter((g) => {
-    if (localGroupIds.has(g.groupId)) return false;
-    if (owedExits.has(g.groupId)) {
-      // Never silent: this is the branch that makes a server group invisible, and the reader who
-      // wonders where a group went must find the reason rather than deduce it.
-      log(
-        `[DISCOVERY] ${g.groupId.slice(0, 8)}... not re-created - this device owes the server an exit for it`
-      );
-      return false;
-    }
-    return true;
-  });
+  const missing = activeServerGroups.filter((g) => !localGroupIds.has(g.groupId));
 
   if (missing.length > 0) {
     log(
@@ -590,63 +577,18 @@ export async function discoverMissingGroups(params: {
     );
   }
 
+  // ONE construction, shared with the recovery seam that joins a group. This loop used to build the
+  // row itself, and the external-commit join took its row from HERE - two sweeps over the same
+  // server list, each doing half the job, with no order between them.
   for (const g of missing) {
-    if (conversations.has(g.groupId)) continue;
-
-    // Resolve the DM peer authoritatively: the group name is only a hint and may be malformed
-    // (legacy groups can carry a self-only name -> a bogus "conversation with yourself").
-    // When it is unusable, fall back to the server roster. A DM whose peer cannot be resolved yet
-    // (transport error, or roster transiently self-only mid re-add) is skipped, not shown as self.
-    const directPeer = !g.isGroup
-      ? await resolveDirectPeerId(mlsService, g.groupId, g.name || '', userId, log)
-      : null;
-    if (!g.isGroup && !directPeer) {
-      log(`[DISCOVERY] DM "${g.groupId.slice(0, 8)}..." peer unresolved - skip (retry next sync)`);
-      continue;
-    }
-    const displayName = directPeer || g.name || g.groupId;
-
-    // Local dedup: if a direct conv with this same peer already exists
-    // under a different groupId (server-side duplicate), do not create a
-    // second placeholder - just update the key if needed.
-    if (directPeer) {
-      const alreadyLoaded = [...conversations.values()].find(
-        (c) =>
-          (c.conversationType ?? 'group') === 'direct' &&
-          (c.directPeerId ?? c.contactName).toLowerCase() === directPeer
-      );
-      if (alreadyLoaded) {
-        log(`[DISCOVERY] Duplicate ignored for "${directPeer}" (existing: ${alreadyLoaded.id})`);
-        continue;
-      }
-    }
-
-    const key = g.groupId; // map key = groupId
-    // A group already present in the local WASM (e.g. joined via an external commit before this
-    // discovery ran) is live: mark it active so the UI leaves the "syncing" placeholder state
-    // without a reload. Otherwise it stays pending until the Welcome is processed.
-    const joinedLocally = holdsGroupState(mlsService, g.groupId);
-    conversations.set(key, {
-      id: g.groupId,
-      contactName: displayName,
-      name: displayName,
-      messages: [],
-      lifecycle: joinedLocally ? 'active' : 'pending',
-      mlsStateHex: null,
-      conversationType: g.isGroup ? 'group' : 'direct',
-      imageMediaId: g.imageMediaId ?? null,
-      ...(directPeer ? { directPeerId: directPeer } : {}),
+    await ensureConversationForServerGroup(g, {
+      mlsService,
+      userId,
+      conversations,
+      saveConversation,
+      owedExits,
+      log,
     });
-    if (saveConversation) {
-      try {
-        await saveConversation(key);
-      } catch (e) {
-        log(
-          `[WARN] Placeholder persistence failed for ${g.groupId}: ${e instanceof Error ? e.message : String(e)}`
-        );
-      }
-    }
-    log(`[DISCOVERY] Placeholder "${displayName}" created.`);
   }
 
   // ── Seed group name + avatar from the server (source of truth) ───────────

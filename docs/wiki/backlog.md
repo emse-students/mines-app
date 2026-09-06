@@ -2061,11 +2061,12 @@ recognises one class of duplicate and acknowledges it without decrypting, so thi
 different path. **A race that heals cleanly is still a defect**, and this one heals by asking the
 peer for history it already has.
 
-### P1 - the request travels on a channel epochs cannot break and the ANSWER does not, so a device that repairs itself by joining can never read the reply (measured 2026-09-06 on the gateway and the delivery service)
+### P1 - FIXED, NOT SHIPPED - a rejoining device was REACHABLE for a group five seconds before it could ROUTE for it, and the answer repairing its history landed in the gap (measured 2026-09-06, fixed the same day)
 
 HEAL-REVOKE-4 sends three messages while a device is revoked, then brings it back. The device never
-gets them. **It is not a delay, not a timer, and not a delivery failure** - the first two readings of
-this said "314 seconds" and "never routed", and both were wrong. What is true is worse and simpler.
+gets them. **It is not a delay, not a timer, and not a delivery failure** - the first three readings
+of this said "314 seconds", "never routed" and "unreadable at the old epoch", and all three were
+wrong. What is true is simpler, and it is an ORDERING.
 
 WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end:
 
@@ -2078,46 +2079,65 @@ WHAT THE DELIVERY SERVICE SAYS ABOUT W1'S ANSWER - one send, followed end to end
 ```
 
 **It was delivered, live, in the same second, to a device the server knew was online.** The gateway
-agrees: exactly one `kind=mls` frame to that device for that group. Six seconds later the device
-logs `27a8f5bf holds 4 frame(s) it can never read`. **The answer arrived and could not be decrypted.**
-
-**THE TWO LEGS OF ONE EXCHANGE TRAVEL ON DIFFERENT CHANNELS, AND ONLY ONE OF THEM SURVIVES AN EPOCH
-CHANGE.** The same second, from the same log:
+agrees: exactly one `kind=mls` frame to that device for that group. And the DEVICE'S OWN console says
+what happened to it:
 
 ```
-[COMMIT] base published with the commit group=GRP epoch=2      <- the joiner CREATED epoch 2
-[MEMBERSHIP_ACTIVE] device=<the returned device>
-[HISTORY_REQ] FORWARDED target=<W1> requester=<the returned device>   <- kind=CONTROL, device-addressed
-[SEND] sender=<W1> ...                                                <- kind=MLS, group, epoch-bound
+02:00:37  [READD] 27a8f5bf... rejoined via external commit (self-service)
+02:00:37  [MLS] Message for absent conversation 27a8f5bf... - retry after restore
+02:00:42  [DISCOVERY] Placeholder "..." created
 ```
 
-The device rejoins by EXTERNAL COMMIT, which advances the group to epoch 2. Its solicitation reaches
-W1 as a `control` frame - addressed to a device, carried outside the group, immune to all of this.
-W1's answer goes back as an ordinary MLS group message. If W1 has not yet applied the commit that
-created epoch 2 - and it has had milliseconds - it encrypts at epoch 1, and **a device that joined AT
-epoch 2 holds no epoch-1 secrets and never will**. The reply is unreadable by construction, not by
-accident, and the window is the width of one commit's propagation.
+**The device was a member of the group for five seconds before it held a conversation to put anything
+in.** `externalJoin` PUBLISHES the leaf: from the instant it returns, every member may address the
+group and the delivery service routes to it. The conversation row - the thing that makes an arriving
+frame routable - came from `discoverMissingGroups`, a DIFFERENT sweep over the SAME server list,
+running fire-and-forget on its own cadence. Two halves of one act, no order between them, and the
+order actually taken decided by whichever finished first.
 
-**NOTHING RETRIES, so the exchange simply dies.** The device sits holding four frames it cannot read
-and an answer it will never decrypt. In the campaign it looks like a 300 s delay only because the
-harness reloads the page when its budget expires, and the reconnect starts a fresh exchange at the
-current epoch - which then works instantly. **In a real session the reconnect may be minutes, hours,
-or never.**
+**AND NOTHING DISCHARGED THE WAIT.** `handleKnownGroup` answers `false` for a group with no
+conversation row, notes `absent-conversation` and leaves the frame in the server queue - which is
+correct, and is the only honest thing to do with a frame nothing can hold. But the sole trigger that
+collected that reason was the boot restore, a ONE-SHOT that had already fired, and which cannot
+produce a conversation the local store has never held. So the frame sat in the queue until the next
+reconnect. In the campaign that looks like a 300 s delay only because the harness reloads the page
+when its budget expires; **in a real session the reconnect may be minutes, hours, or never.**
 
-**THE FIX IS THE ASYMMETRY, and the request leg already shows what right looks like.** An answer to a
-device-addressed solicitation should not be sent as group ciphertext at whatever epoch the responder
-happens to hold: either it travels `control` as the request does, or the responder applies pending
-commits for that group before answering. **Anything that keeps the answer epoch-bound keeps the
-defect**, because the responder cannot know it is behind at the moment it replies.
+**THE FIX IS THE ORDER, AND THE WELCOME PATH ALREADY SHOWED WHAT RIGHT LOOKS LIKE.**
+`setupMessageHandler` writes the conversation row INSIDE the MLS lock that installs the group, so
+joining and being able to route are one step; the external-commit join had no such step. It has one
+now: `requestReAdd` builds the row - through the seam extracted from discovery, so there is ONE
+construction and not two conventions - and only then publishes the leaf. Three outcomes refuse the
+join rather than proceeding without a row: an owed exit (which also TERMINATES the recovery, on that
+durable row as a proof - rejoining a group the user deleted is DEL-10 with the halves swapped), an
+unresolved DM peer, and a duplicate. The transient-`getGroupMeta` branch, which said "skip this
+round" in its comment and then fell through to the join anyway, now really does skip.
+See [serverGroupConversation.ts](../../frontend/src/lib/utils/chat/serverGroupConversation.ts).
+
+**WHY IT TOOK FOUR READINGS, AND WHAT THE FOURTH CORRECTS.** The ack barrier and the exclusion-reason
+bug were both suspected, both fixed, and neither moved the number - and it was that second failure to
+move it that forced the reading off the client and onto the gateway, where the "300 s" turned out to
+be the instrument's own budget. **A number reproduced four times looked like a product constant and
+was a harness's.** The third reading then said W1's reply was encrypted at an epoch the joiner holds
+no secrets for, and **that reading asserts a decrypt that never happened**: the conversation guard in
+`handleKnownGroup` sits BEFORE any decrypt, so the frame was refused without being tried.
+
+  **SO THE EPOCH QUESTION IS OPEN, NOT ANSWERED - and it is the first thing the re-run measures.**
+  The two legs of this exchange really do travel differently: the solicitation reaches W1 as a
+  `control` frame, device-addressed and outside the group; the answer comes back as an ordinary MLS
+  group message, epoch-bound. A responder milliseconds behind the joiner's own external commit would
+  encrypt at the previous epoch. **Nothing here proves that happens and nothing here rules it out**,
+  because until the ordering fix the frame never reached a decrypt to find out. The re-run of
+  HEAL-REVOKE-4 on the fixed build is the first time it will, and `holds N frame(s) it can never
+  read` is NOT evidence either way - that summary counts `past-epoch-application`, the pre-join
+  backlog every fresh joiner meets by construction.
 
   READ WITH THE FOUR FIXED ON 2026-09-05, which are the same family: an answer that arrives before
   the asker can receive it. Those four were about the WAITER not being there; this one is about the
-  answer being unreadable when it lands, which no amount of waiting fixes.
+  device being ADDRESSABLE before it was ready to be addressed.
 
-**WHY IT TOOK THREE READINGS.** The ack barrier and the exclusion-reason bug were both suspected,
-both fixed, and neither moved the number - and it was that second failure to move it that forced the
-reading off the client and onto the gateway, where the "300 s" turned out to be the instrument's own
-budget. **A number reproduced four times looked like a product constant and was a harness's.**
+**OWED**: a re-run of HEAL-REVOKE-4, HEAL-REVOKE-5 and HEAL-repair on a build carrying the fix. Until
+then this is FIXED, NOT SHIPPED.
 
 ### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
 

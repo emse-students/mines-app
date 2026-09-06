@@ -32,6 +32,10 @@ function makeMls(overrides: Partial<IMlsService> = {}): IMlsService {
     getGroupServerStatus: vi.fn().mockResolvedValue('absent'),
     getGroupUserMembers: vi.fn().mockResolvedValue([]),
     isDistributionGroup: vi.fn().mockReturnValue(false),
+    // Creating a placeholder ANNOUNCES it: a frame already buffered `absent-conversation` for this
+    // group becomes routable at exactly this instant. Stubbed here rather than per test because
+    // every path through `ensureConversationForServerGroup` that creates a row calls it.
+    notifyConversationAvailable: vi.fn(),
     registerDistributionGroup: vi.fn(),
     forgetDistributionGroupById: vi.fn((groupId: string) => {
       const local = (built.getLocalGroups as () => string[])();

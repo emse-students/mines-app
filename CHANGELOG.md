@@ -13,6 +13,30 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device that repaired itself by rejoining a group became reachable for it five seconds before
+  it could route anything, and the answer carrying its missing history landed in the gap.**
+  `externalJoin` publishes this device's leaf: the instant it returns, every member may address the
+  group and the delivery service routes to it. What makes an arriving frame usable is a conversation
+  row - and that row came from `discoverMissingGroups`, a different sweep over the SAME server list,
+  running fire-and-forget on its own cadence. Two halves of one act with no order between them.
+  Measured on HEAL-REVOKE-4 (2026-09-06): the join won by five seconds; the member's answer to the
+  device's own history solicitation, sent in the same second, was refused `absent-conversation`
+  before any decrypt and left in the server queue; and nothing collected it, because the sole
+  trigger for that reason was a one-shot boot restore that had already fired and that cannot produce
+  a conversation the local store has never held. Every layer reported success -
+  `online=true ... realtime=1`. In the campaign it read as a 300 s delay only because the harness
+  reloads the page when its budget expires; in a real session the reconnect may be hours, or never.
+  **The Welcome path never had the gap** - it writes the row inside the MLS lock that installs the
+  group - so the fix is to give this path the same shape rather than to add a trigger repairing the
+  window afterwards: the row is built first, through the seam extracted from discovery so that ONE
+  function builds a conversation row and not two conventions for its key, its name and its duplicate
+  check. Three outcomes now refuse the join instead of proceeding without a row - an owed exit,
+  which also terminates the recovery on that durable row as a proof (rejoining a group the user
+  deleted is the DEL-10 resurrection with its halves swapped), an unresolved DM peer, and a
+  duplicate. And the transient-metadata branch, which said "skip this round" in its own comment and
+  then fell through to the join anyway, now really does skip: `isGroup` decides whether the row is a
+  DM, so an unread server row is a question nobody answered rather than a default.
+
 - **A device acknowledged a batch of messages and then immediately asked the server for them
   again**, because the ack was fire-and-forget and the pull that followed it in the SAME TICK had no
   way to wait. `onDrainEnd` ACKs the rows it just drained and then calls `refetchFramesLeftBehind`,

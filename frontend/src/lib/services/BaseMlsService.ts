@@ -59,6 +59,7 @@ import { classifyIncomingDecryptError } from '$lib/mls-client/mlsDecryptError';
 import { scopeKey, scopeLabel, type DistributionScope } from '$lib/mls-client/distributionScope';
 import {
   reportUnackedFrames,
+  takeGroupAwaiting,
   takeGroupsAwaiting,
   type UnackedReason,
 } from '$lib/mls-client/messagePipeline/unackedFrames';
@@ -1015,6 +1016,15 @@ export abstract class BaseMlsService implements IMlsService {
     this.refetchFramesLeftBehind('absent-conversation', 'conversations restored');
   }
 
+  /** @inheritdoc */
+  notifyConversationAvailable(groupId: string): void {
+    this.refetchFramesLeftBehind(
+      'absent-conversation',
+      `conversation ${groupId.slice(0, 8)}… now exists`,
+      groupId
+    );
+  }
+
   /** Runs `fn` under the global MLS client mutex (shared with the drain and catch-up sessions). */
   runUnderMlsLock<T>(fn: () => Promise<T>): Promise<T> {
     return this.messageScheduler.runUnderMlsLock(fn);
@@ -1260,8 +1270,23 @@ export abstract class BaseMlsService implements IMlsService {
    *
    * Silent and free when nothing is waiting, so callers may fire it on any occurrence of the event.
    */
-  protected refetchFramesLeftBehind(reason: UnackedReason, trigger: string): void {
-    const groups = takeGroupsAwaiting(reason);
+  protected refetchFramesLeftBehind(
+    reason: UnackedReason,
+    trigger: string,
+    /**
+     * One group, when the event that discharges the wait is per-group rather than global.
+     *
+     * ONE IMPLEMENTATION, because the two callers differ only in WHICH entries they take: everything
+     * after that - the socket check, the line, the pull - is identical, and a second copy is how the
+     * two would drift into disagreeing about whether a closed socket still owes a re-fetch.
+     */
+    groupId?: string
+  ): void {
+    const groups = groupId
+      ? takeGroupAwaiting(reason, groupId)
+        ? [groupId]
+        : []
+      : takeGroupsAwaiting(reason);
     if (groups.length === 0) return;
     if (!this.isWsOpen()) {
       // Nothing to re-fetch over: the reconnect runs a pull of its own, and the handler will note

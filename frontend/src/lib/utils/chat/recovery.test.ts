@@ -34,8 +34,19 @@ const probeSender = vi.fn().mockResolvedValue(true);
 function makeMls(overrides: Record<string, unknown> = {}) {
   return {
     // Default = group alive on server (neither absent nor tombstone).
-    getGroupMeta: vi.fn().mockResolvedValue({ groupId: 'mock-group', deletedAt: null }),
-    getGroupServerStatus: vi.fn().mockResolvedValue({ groupId: 'mock-group', deletedAt: null }),
+    //
+    // `isGroup` IS PART OF THE DEFAULT because the join now refuses to proceed without it: the
+    // conversation row it must exist behind is a DM or a group, and the server row is the only
+    // thing that says which. A stub omitting it puts every case on the deferral path.
+    getGroupMeta: vi
+      .fn()
+      .mockResolvedValue({ groupId: 'mock-group', isGroup: true, deletedAt: null }),
+    getGroupServerStatus: vi
+      .fn()
+      .mockResolvedValue({ groupId: 'mock-group', isGroup: true, deletedAt: null }),
+    // Creating the conversation row ANNOUNCES it, so a frame buffered `absent-conversation` for
+    // this group becomes routable at that instant.
+    notifyConversationAvailable: vi.fn(),
     getLocalGroups: vi.fn().mockReturnValue([]),
     sendWelcomeRequest: vi.fn().mockResolvedValue(undefined),
     sendBaseRefreshRequest: vi.fn().mockResolvedValue(undefined),
@@ -302,7 +313,9 @@ describe('requestReAdd', () => {
   it('group tombstoned server-side (deletedAt) -> marks the conversation removed, no recovery', async () => {
     const deps = makeDeps({
       mlsService: makeMls({
-        getGroupMeta: vi.fn().mockResolvedValue({ groupId: 'tomb', deletedAt: '2026-01-01' }),
+        getGroupMeta: vi
+          .fn()
+          .mockResolvedValue({ groupId: 'tomb', isGroup: true, deletedAt: '2026-01-01' }),
       }),
       conversations: makeConversations([
         ['tomb', { id: 'tomb', name: 'Gone', lifecycle: 'active' }],
@@ -683,14 +696,63 @@ describe('requestReAdd - the promotion after a successful external join', () => 
     expect(deps.saveConversation).not.toHaveBeenCalled();
   });
 
-  it('joins with no local conversation record at all, and does not invent one', async () => {
-    // A commit can arrive before any conversation row exists; the not-ready registry is what the
-    // watchdog enumerates for those, and the row is created by the paths that name the peer.
+  it('creates the conversation row BEFORE publishing the leaf, never after it', async () => {
+    // THE ORDER IS THE ASSERTION, and a test that only checked the row exists AFTERWARDS would pass
+    // on the defect: it did exist afterwards - five seconds afterwards, created by a different
+    // sweep - and the member's history answer arrived in between and was buffered
+    // `absent-conversation` (HEAL-REVOKE-4, 2026-09-06). `externalJoin` is the instant this device
+    // becomes addressable, so what the map holds AT THAT CALL is the whole question.
     const deps = makeDeps({ mlsService: joined(), conversations: makeConversations() });
+    let rowsWhenTheLeafWentOut = -1;
+    deps.mlsService.externalJoin = vi.fn(async () => {
+      rowsWhenTheLeafWentOut = deps.conversations.size;
+      return { joined: true };
+    });
 
     await requestReAdd('g1', deps);
 
+    expect(rowsWhenTheLeafWentOut).toBe(1);
+    expect(deps.conversations.get('g1').id).toBe('g1');
+    // And it is persisted, so a reload cannot re-open the window the join just closed.
+    expect(deps.saveConversation).toHaveBeenCalledWith('g1');
+  });
+
+  it('does not join at all when no row can be built, rather than joining anyway', async () => {
+    // A DM whose peer the roster cannot name yet has no row that can be created, so this device
+    // must not become reachable for it. The watchdog re-invokes on its cadence; joining first would
+    // buy nothing but the window above.
+    const deps = makeDeps({
+      mlsService: joined(),
+      conversations: makeConversations(),
+    });
+    deps.mlsService.getGroupMeta = vi
+      .fn()
+      .mockResolvedValue({ groupId: 'g1', isGroup: false, name: '', deletedAt: null });
+    deps.mlsService.getGroupUserMembers = vi.fn().mockResolvedValue([{ userId: 'user-a' }]);
+
+    await requestReAdd('g1', deps);
+
+    expect(deps.mlsService.externalJoin).not.toHaveBeenCalled();
     expect(deps.conversations.size).toBe(0);
-    expect(deps.saveConversation).not.toHaveBeenCalled();
+  });
+
+  it('stops recovering a group this device owes the server an exit for', async () => {
+    // Rejoining a group the user deleted is the DEL-10 resurrection with the halves swapped: the
+    // row is refused (correctly), so the join would make this device a member of a group nothing
+    // can route for, for ever. Terminating on the owed-exit row is a proof, not a timeout.
+    const deps = makeDeps({
+      mlsService: joined(),
+      conversations: makeConversations(),
+      storage: {
+        getPendingGroupExits: vi
+          .fn()
+          .mockResolvedValue([{ groupId: 'g1', kind: 'delete', requestedAt: 1 }]),
+      },
+    });
+
+    await requestReAdd('g1', deps);
+
+    expect(deps.mlsService.externalJoin).not.toHaveBeenCalled();
+    expect(deps.conversations.size).toBe(0);
   });
 });
