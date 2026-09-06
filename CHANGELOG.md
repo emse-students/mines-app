@@ -11,6 +11,8 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-09-06
+
 ### Fixed
 
 - **A device published fifty one-time prekeys and immediately purged all fifty, on every
