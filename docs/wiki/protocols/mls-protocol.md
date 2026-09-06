@@ -615,6 +615,16 @@ unknown fields. Each candidate now recomputes its own `hash_ref` and must be nam
 stored under - exact by construction, since `openmls_memory_storage` builds every key as
 `label || json(id) || version`.
 
+**WHAT IS BOUNDED AND WHAT IS NOT, MEASURED RATHER THAN DIVIDED.** `what_an_epoch_costs_at_constant_membership`
+churns one device in and out of a group forty times: at **81 epochs the state PLATEAUS at 17 364
+bytes**, growth stopping after the second round, with `MessageSecrets` and `ResumptionPsk` holding
+ONE entry each. **Accumulated epochs are therefore NOT what makes a long-lived group heavy** - the
+obvious suspect, eliminated. The field number that prompted it: sweeping 42 abandoned groups off a
+Mi 9T took `mls.bin` from 20 812 360 to 8 018 495 bytes and a checkpoint from 48 449 ms to 6 943 ms.
+What remains expensive about a real group is not yet named, and
+`MlsManager::state_composition` exists so the next occurrence is read off the device rather than
+inferred - which is how the same question got two wrong answers in one evening.
+
 **What this does NOT do.** It bounds growth at (mint rate x 84 days) and does not shrink a blob whose
 bundles are younger. Two accrual paths remain open in [backlog](../backlog.md): reusing a still-valid
 last-resort package instead of minting one per connection, and `republishKeyMaterial`'s 50 orphans.

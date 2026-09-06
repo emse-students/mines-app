@@ -4776,6 +4776,30 @@ arithmetic to argue about.** The client agrees from its own side: `needed=50` at
 not 49, not 30 - which is only possible if the pool is EMPTY each time. Reading 1 was right, and the
 debris is what made it look like something else.
 
+**WHAT THE FIELD SHOWED THE SAME NIGHT, AND IT CORRECTS THIS ENTRY'S ARITHMETIC A THIRD TIME.**
+After `cleanup.mjs` swept 42 abandoned groups, the phone's `mls.bin` fell from **20 812 360 to
+8 018 495 bytes** - 12.8 MB, 61% - and one checkpoint from 48 449 ms to **6 943 ms**. The prune
+shipped that day did NOT fire (no line in the capture), so the drop is the groups.
+
+That looked like it demoted key packages, so the mechanism was measured rather than divided:
+`what_an_epoch_costs_at_constant_membership` churns one device in and out of a group forty times and
+**the state PLATEAUS - 81 epochs, 17 364 bytes, growth stops after the second round.** Epochs are
+bounded, `MessageSecrets` and `ResumptionPsk` stay at ONE entry each, so accumulated epochs are not
+what makes a real group heavy. **That refutation is the useful part**; what remains heavy about a
+campaign group is not yet named.
+
+**AND THE LOOP DID NOT REPRODUCE ON THE BUILD CARRYING THE GUARD.** With the pool emptied by hand to
+force a mint, the phone published 50 and kept all 50 - `needed=50`, no purge, and the guard's own
+`REFUSED` line never fired, meaning `keyPackageHasPrivate` recognised every one of them. The failing
+condition therefore needs something this run did not have, and the difference worth suspecting is the
+checkpoint cost: 48 s when it failed, 6.9 s when it did not. **That is a hypothesis and it is written
+as one** - three readings have already been wrong here, two of them from dividing numbers instead of
+removing a variable.
+
+**THE INSTRUMENT THAT WOULD HAVE SETTLED ALL OF THIS DID NOT EXIST**, which is why it now does:
+`MlsManager::state_composition` logs what the state is made of once per load, so the next occurrence
+is read rather than inferred.
+
 **WHAT THIS MEANS IN PRODUCTION, AND IT IS WORSE THAN THE BLOB.** A device whose one-time pool is
 empty is served its STATIC FALLBACK to every peer that asks. That is exactly the condition
 [mls-protocol](protocols/mls-protocol.md#the-two-kinds-of-key-package) names as the reason the
