@@ -231,11 +231,13 @@ noticing. Order = priority. Detail lives where the link says. Defect stories are
 rules in [durable-rules](docs/wiki/durable-rules.md), verdicts on
 [cross-client-testing](docs/wiki/cross-client-testing.md).
 
-1. **ELEVEN RUNGS COMPLETE, 147 OF 246 ROWS ANSWERED** - the board is
-   [cross-client-testing](docs/wiki/cross-client-testing.md) and **`bun rows.mjs` settles it**,
-   naming what is not `PASS` and adjudicating a row that is a COMPARISON on ALL its halves. Run it
-   rather than quoting a count from here. PIN's four remaining rows CHANGE a PIN or restart a
-   browser, which is why they are last.
+1. **THE BOARD IS [cross-client-testing](docs/wiki/cross-client-testing.md) AND `bun rows.mjs`
+   SETTLES IT** - what is answered, what is not `PASS`, and a COMPARISON row adjudicated on ALL its
+   halves. **No count is written here**: the two that were went stale within a day. PIN's four
+   remaining rows CHANGE a PIN or restart a browser, which is why they are last. **The HEAL-NEW rung
+   now refuses rather than passes**: a fresh device reaches every group with NOTHING online, so the
+   rows that watch a responder heal one have no window left and need a group the device cannot
+   self-serve ([backlog](docs/wiki/backlog.md)).
 2. **P1 - a PLACEHOLDER held a member's seat**; whether a LEAF is left in the MLS tree only a
    member's CLIENT can say. [backlog](docs/wiki/backlog.md#p1---the-placeholder-is-gone-from-prod-what-it-may-have-left-in-the-mls-tree-is-not-answered).
 3. **FIXED, NOT SHIPPED - FOUR defects that each cost a rejoining device its history**, found by
@@ -335,17 +337,17 @@ re-deriving anything here, and keep no second copy.**
 
 **Five facts that are NOT on those pages, or that a session gets wrong by skipping them.**
 `bun rows.mjs` SETTLES whether the board matches the ledger - run it before believing a cell, it
-has caught the board wrong three times. **The rig targets the LOCAL estate since 2026-09-03, and
-the mutual-exclusion rule died with that move**: a push deploys nothing now, so there is no event
-left to be exclusive with, and the accident that voided three cells cannot recur; what replaces it
-is a `bun run dev` reload, which does the same damage on a SAVE, has no run to watch, and is what
-`bundle.mjs` measures. **The board is reset to zero**, archived at
+has caught the board wrong three times. **The rig targets the LOCAL estate since 2026-09-03**, so a
+push deploys nothing and the mutual-exclusion rule died with that move
+([methodology](docs/wiki/testing-methodology.md)); what replaces it is a rebuild or a `bun run dev`
+SAVE, which `bundle.mjs` measures. **The board is reset to zero**, archived at
 [archive](docs/wiki/cross-client-testing-archive.md). **A killed run can destroy a measurement
 seconds from being recorded, and losing a `chrome-w1`/`chrome-w2` profile costs a DEVICE.** **THE
 USER ASKED FOR THE LOGS TO BE READ ON EVERY PASS, the reconciliations especially** (2026-08-28) - a
 heal that works is not a heal that was observed, and reading them has since found one P1 no row asks
 about and turned a `FAIL` into another. Two instrument facts: the disposition for expected noise is
-`ignoringExpectedLog` **per row**, never a wider classifier, and the device cap is **re-measured
+`ignoringExpectedLog` **per row**, never a wider classifier - and a list the runner never NAMES is
+the same as no list, which cost a whole rung on 2026-09-06 - and the device cap is **re-measured
 around every run** rather than quoted.
 
 **Standing architectural directives from the user, verbatim:** *"le probleme doit etre
