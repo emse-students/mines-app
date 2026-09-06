@@ -10,8 +10,9 @@ import {
   MLS_LOCAL_STATE_UNDECRYPTABLE,
   type MlsInitOptions,
 } from '$lib/mls-client';
+import { mintKeyPackages } from '$lib/mls-client/keyPackages';
 import type { MlsKeyPackageRequest } from '$lib/mls-client/mlsWorkerProtocol';
-import { isChannelEventFrame } from '$lib/mls-client/channelEventTypes';
+import { isChannelEventFrame, isHeartbeatFrame } from '$lib/mls-client/channelEventTypes';
 import { parseServerTimestampMs } from '$lib/mls-client/incomingDelivery';
 import { getToken } from '$lib/stores/auth';
 import {
@@ -439,9 +440,7 @@ export class WebMlsService extends BaseMlsService {
 
           const msg = JSON.parse(text);
           const frameType = typeof msg.type === 'string' ? msg.type : '';
-          if (frameType === 'pong' || frameType === 'ping') {
-            return;
-          }
+          if (isHeartbeatFrame(frameType)) return;
           // THE ONE FIELD EVERY FRAME HAS IS ITS TYPE, and this line used to print four that only a
           // PAYLOAD frame carries - so every control frame (a read receipt, a typing signal, a
           // channel event) announced itself as `senderId=undefined, isWelcome=undefined,
@@ -762,7 +761,7 @@ export class WebMlsService extends BaseMlsService {
     console.log('[MLS] Device key changed - state re-encrypted and persisted.');
   }
 
-  /** WASM client wrapper - calls `this.client.generate_key_package`, replenishes the OTKP pool to 50, saves state, then publishes to the delivery service. */
+  /** WASM client wrapper - mints the fallback + pool via {@link mintKeyPackages}, replenishes the OTKP pool to 50, saves state, then publishes to the delivery service. */
   protected async generateKeyPackageImpl(deviceKeyB64: string): Promise<Uint8Array> {
     // On fresh start (no saved WASM state), old OTKPs on the server belong to
     // a previous session whose private keys are gone. Purge them so inviting
@@ -817,18 +816,9 @@ export class WebMlsService extends BaseMlsService {
             // not in the live client. Regenerate on the authoritative live client rather than
             // publish orphaned prekeys (which would later cause NoMatchingKeyPackage).
             console.warn('[MLS] key package worker snapshot stale - regenerating on live client');
-            const fb = this.client.generate_key_package() as Uint8Array;
-            const pool =
-              needed > 0
-                ? [
-                    ...(this.client.generate_key_packages(
-                      needed
-                    ) as unknown as Iterable<Uint8Array>),
-                  ]
-                : [];
+            const minted = mintKeyPackages(this.client, needed);
             return {
-              fallback: fb,
-              poolPackages: pool,
+              ...minted,
               stateBytesToPersist: this.client.save_state(deviceKeyB64) as Uint8Array,
             };
           }
@@ -839,14 +829,9 @@ export class WebMlsService extends BaseMlsService {
           };
         } catch (e) {
           console.warn('[MLS] key package worker failed, fallback to main thread path:', e);
-          const fb = this.client.generate_key_package() as Uint8Array;
-          const pool =
-            needed > 0
-              ? [...(this.client.generate_key_packages(needed) as unknown as Iterable<Uint8Array>)]
-              : [];
+          const minted = mintKeyPackages(this.client, needed);
           return {
-            fallback: fb,
-            poolPackages: pool,
+            ...minted,
             stateBytesToPersist: this.client.save_state(deviceKeyB64) as Uint8Array,
           };
         }
@@ -856,13 +841,7 @@ export class WebMlsService extends BaseMlsService {
       stateBytesToPersist = workerGenResult.stateBytesToPersist;
     } else {
       // Always generate a fresh static fallback KP for this device.
-      fallback = this.client.generate_key_package() as Uint8Array;
-      if (needed > 0) {
-        // generate_key_packages returns a js_sys::Array of Uint8Array values.
-        poolPackages = [
-          ...(this.client.generate_key_packages(needed) as unknown as Iterable<Uint8Array>),
-        ];
-      }
+      ({ fallback, poolPackages } = mintKeyPackages(this.client, needed));
       stateBytesToPersist = this.client.save_state(deviceKeyB64) as Uint8Array;
     }
 

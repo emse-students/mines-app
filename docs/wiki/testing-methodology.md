@@ -2069,6 +2069,22 @@ rate has found something.
 These are not faults of judgement - they are platform behaviours that will be mistaken for defects
 by anyone who has not met them.
 
+- **MIUI CUTS A BACKGROUNDED APP'S NETWORK OUTRIGHT, AND EVERY ROW ABOUT A PHONE IN A POCKET IS
+  MEASURING THAT UNLESS IT SAYS OTHERWISE.** Measured on the Mi 9T on 2026-09-06 with one fetch,
+  issued from the same page over CDP (which travels on adb, not on the app's network, so it does not
+  answer its own question): `status 404` in 49 ms with the app in front, `error sending request for
+  url` in 32 ms behind HOME. With the socket gone, the JS layer cannot receive a frame, cannot
+  notify, and the FCM handler's own `fetchWelcomeBundle` fails as `Unable to resolve host
+  "localhost"` - which reads exactly like a rig misconfiguration and is not one. `dumpsys netpolicy`
+  is NO help: its `blocked_state={...effective=APP_BACKGROUND}` line for the uid is identical
+  foreground and background, so it describes a policy rather than a verdict. Lift it with
+  `adb shell cmd appops set fr.emse.canari RUN_ANY_IN_BACKGROUND allow` and
+  `adb shell dumpsys deviceidle whitelist +fr.emse.canari`, and **assert it inside the row**:
+  NOTIF-1b carries `theOsLetTheHiddenAppKeepItsNetwork` as its own clause, because "the OS cut the
+  network" and "the product stayed silent" are different findings that must never share a verdict.
+  Note what this also means for the PRODUCT: on a phone configured as it ships, the JS notification
+  path does not exist and the push is the only one there is.
+
 - **A PUSH TO `main` IS A RESTART OF THE SERVER UNDER THE RUN.** Prod IS the test server, so every
   commit that reaches CD - including one touching only `tools/` - stops the containers, and nginx
   drops whatever the rig had in flight. On 2026-08-21 that took out COMM-22's fifth and sixth cycles,

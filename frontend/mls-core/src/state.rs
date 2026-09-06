@@ -303,7 +303,19 @@ impl MlsManager {
 
     // --- E. GÉNÉRER MON KEY PACKAGE ---
 
-    pub fn generate_key_package(&self) -> Result<Vec<u8>, MlsError> {
+    /// Builds, persists and serialises one KeyPackage.
+    ///
+    /// `last_resort` decides the ONE thing that separates the two kinds this device publishes, and
+    /// it decides it in the crypto rather than in a convention: `into_group` deletes the private
+    /// bundle after a Welcome built on the package is processed *unless* the package carries the
+    /// `last_resort` extension (openmls 0.8.1, `group/mls_group/creation.rs:605`). A pool prekey is
+    /// claimed once and its server row deleted with it, so it must be forgettable; the static
+    /// fallback is served to every peer that finds the pool empty, so it must not be.
+    ///
+    /// The leaf capabilities have to declare `LastResort` as well - a leaf validates locally that
+    /// its capabilities cover the extensions it uses, and a peer re-runs that validation on the
+    /// KeyPackage it was handed.
+    fn build_key_package(&self, last_resort: bool) -> Result<Vec<u8>, MlsError> {
         let ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
         let credential_with_key = CredentialWithKey {
@@ -311,7 +323,20 @@ impl MlsManager {
             signature_key: self.keypair.public().into(),
         };
 
-        let key_package_bundle = KeyPackage::builder()
+        let mut builder = KeyPackage::builder();
+        if last_resort {
+            builder = builder
+                .mark_as_last_resort()
+                .leaf_node_capabilities(Capabilities::new(
+                    None,
+                    None,
+                    Some(&[ExtensionType::LastResort]),
+                    None,
+                    None,
+                ));
+        }
+
+        let key_package_bundle = builder
             .build(
                 ciphersuite,
                 &self.provider,
@@ -326,10 +351,6 @@ impl MlsManager {
             .hash_ref(self.provider.crypto())
             .map_err(|e| MlsError::OpenMls(format!("HashRef error: {:?}", e)))?;
 
-        let _hash_ref_bytes = hash_ref.as_slice();
-        // Console log via error or panic? No, we can't easily console log from here without bindings.
-        // We will rely on return verification.
-
         self.provider
             .storage()
             .write_key_package(&hash_ref, &key_package_bundle)
@@ -341,6 +362,17 @@ impl MlsManager {
         key_package
             .tls_serialize_detached()
             .map_err(|e| MlsError::OpenMls(format!("Serialization error: {:?}", e)))
+    }
+
+    /// A one-time prekey for the server-side pool: consumed by the first Welcome built on it.
+    pub fn generate_key_package(&self) -> Result<Vec<u8>, MlsError> {
+        self.build_key_package(false)
+    }
+
+    /// The device's static fallback, served by the delivery service to every peer that finds the
+    /// one-time pool empty. Reusable by construction - see [`Self::build_key_package`].
+    pub fn generate_last_resort_key_package(&self) -> Result<Vec<u8>, MlsError> {
+        self.build_key_package(true)
     }
 
     pub fn generate_key_packages(&self, count: usize) -> Result<Vec<Vec<u8>>, MlsError> {

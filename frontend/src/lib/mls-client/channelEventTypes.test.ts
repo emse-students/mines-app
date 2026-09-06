@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isChannelEventFrame } from './channelEventTypes';
+import { isChannelEventFrame, isHeartbeatFrame } from './channelEventTypes';
 
 /**
  * The routing table both socket clients ask, and the four frames it used to drop.
@@ -63,5 +63,41 @@ describe('isChannelEventFrame', () => {
   it('does not match a family named in the middle of a type', () => {
     expect(isChannelEventFrame('mls.channel.updated')).toBe(false);
     expect(isChannelEventFrame('channel')).toBe(false);
+  });
+});
+
+/**
+ * The gateway answers every 8-second heartbeat with `{"type":"pong"}`, so this predicate runs on
+ * the most frequent frame either client ever sees. `WebMlsService` compared inline and returned;
+ * `TauriMlsService` had no such branch and printed `frame type "pong" reached no handler - the
+ * server is sending something this client does not route` on every one of them: thirteen in ninety
+ * seconds on a Mi 9T on 2026-09-06, for ever, on every mobile client, accusing the server over the
+ * one frame it is required to send.
+ */
+describe('isHeartbeatFrame', () => {
+  it('claims the keepalives, which belong to no handler', () => {
+    expect(isHeartbeatFrame('pong')).toBe(true);
+    expect(isHeartbeatFrame('ping')).toBe(true);
+  });
+
+  it('claims nothing else - a heartbeat that swallowed a real frame would be the worse defect', () => {
+    for (const type of [
+      '',
+      'welcome_request',
+      'device_revoked',
+      'typing',
+      'channel.message.created',
+      'workspace.updated',
+      'pinged',
+      'pong.extra',
+    ]) {
+      expect(isHeartbeatFrame(type)).toBe(false);
+    }
+  });
+
+  it('is disjoint from the channel-event table, so neither can shadow the other', () => {
+    for (const type of ['ping', 'pong']) {
+      expect(isChannelEventFrame(type)).toBe(false);
+    }
   });
 });

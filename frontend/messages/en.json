@@ -95,7 +95,7 @@
   "auth_pin_stay_signed_in_desc": "Keeps an encrypted copy of your device key after the app closes, so you do not have to re-enter your PIN. The PIN itself is never stored. Only enable this on a personal device.",
   "auth_pin_step_verifying": "Verifying PIN…",
   "auth_pin_step_loading_mls": "Loading MLS…",
-  "auth_pin_timeout": "Unlocking is taking longer than expected. Please try again.",
+  "auth_pin_no_result": "The sign-in ended without a result. Please try again.",
   "auth_pin_step_resetting": "Resetting PIN…",
   "auth_server_unreachable": "Cannot reach the server. Check your connection and try again.",
   "user_search_placeholder": "Search for a user…",

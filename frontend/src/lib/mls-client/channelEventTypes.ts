@@ -37,3 +37,24 @@ export function isChannelEventFrame(type: string): boolean {
   if (!type) return false;
   return CHANNEL_EVENT_PREFIXES.some((prefix) => type.startsWith(prefix));
 }
+
+/** The transport's own keepalive frames, which carry nothing and belong to no handler. */
+const HEARTBEAT_FRAMES = ['ping', 'pong'] as const;
+
+/**
+ * Whether `type` is a keepalive rather than a message.
+ *
+ * THE SAME LESSON AS ABOVE, FOUND AGAIN ON A PHONE. `WebMlsService` returned early on `ping`/`pong`
+ * with an inline comparison; `TauriMlsService` never learned to, so every keepalive the gateway
+ * answered (`{"type":"pong"}`, one per 8 s heartbeat) reached the fall-through branch and printed
+ * `frame type "pong" reached no handler - the server is sending something this client does not
+ * route`. Thirteen of them in ninety seconds on the Mi 9T on 2026-09-06, for ever, on every mobile
+ * client - a warning ACCUSING the server of a defect, on the one frame the server is required to
+ * send. That is worse than silence: it is the line a reader learns to skip, standing in front of
+ * the real ones this branch exists to surface.
+ *
+ * So it is a predicate both clients ask, not a comparison each remembers separately.
+ */
+export function isHeartbeatFrame(type: string): boolean {
+  return (HEARTBEAT_FRAMES as readonly string[]).includes(type);
+}

@@ -233,47 +233,6 @@ pub(crate) fn creer_groupe(group_id: String, state: tauri::State<AppState>) -> R
 }
 
 #[tauri::command]
-pub(crate) async fn generer_key_package(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
-    let manager_state = state.mls_manager.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let lock = manager_state
-            .lock()
-            .map_err(|_| "Failed to lock state".to_string())?;
-        let manager = lock
-            .as_ref()
-            .ok_or_else(|| "MLS Manager not initialized".to_string())?;
-        let fallback = manager.generate_key_package().map_err(|e| e.to_string())?;
-        Ok::<Vec<u8>, String>(fallback)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub(crate) async fn generer_key_packages(
-    count: usize,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<Vec<u8>>, String> {
-    let manager_state = state.mls_manager.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let lock = manager_state
-            .lock()
-            .map_err(|_| "Failed to lock state".to_string())?;
-        let manager = lock
-            .as_ref()
-            .ok_or_else(|| "MLS Manager not initialized".to_string())?;
-        let generated = manager
-            .generate_key_packages(count)
-            .map_err(|e| e.to_string())?;
-        Ok::<Vec<Vec<u8>>, String>(generated)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 pub(crate) async fn key_package_a_clef_privee(
     key_package_bytes: Vec<u8>,
     state: tauri::State<'_, AppState>,
@@ -316,7 +275,13 @@ pub(crate) async fn generer_key_packages_et_persister(
             "generer_key_packages_et_persister start count={} (batch native path)",
             count
         );
-        let fallback = manager.generate_key_package().map_err(|e| e.to_string())?;
+        // The STATIC fallback, and it is last-resort because the delivery service serves this one
+        // package to every peer that finds the pool empty (`resolveKeyPackagePayloadForDevice`).
+        // An ordinary KeyPackage's private bundle dies with the first Welcome built on it, so the
+        // second peer to be served it could never join - see `mls-core/tests/last_resort_key_package.rs`.
+        let fallback = manager
+            .generate_last_resort_key_package()
+            .map_err(|e| e.to_string())?;
         let pool_packages = if count > 0 {
             manager
                 .generate_key_packages(count)

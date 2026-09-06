@@ -13,6 +13,57 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **The PIN gate told the user the unlock had failed, in red, on every cold start of a real phone -
+  while the unlock was working.** A ten-second watchdog in `handlePinSubmit` called itself a
+  "temporal safety net" for "an unexpected early return or a hung network call" and, on expiry, set
+  `auth_pin_timeout` - *"Le deverrouillage prend plus de temps que prevu. Veuillez reessayer."*
+  Measured on a Mi 9T on 2026-09-06, three cold starts out of three: it fired at 18:47:58 and the
+  login succeeded at 18:48:10. The twelve seconds in between are one native call that decrypts a
+  19.9 MB `mls.bin` and logs nothing at all while it runs, so the clock could not distinguish "hung"
+  from "working" - and the retry it advised lands on `loginImpl`'s "a login already owns the flow"
+  guard, which returns silently, so the watchdog manufactured the exact condition it existed to
+  catch. It also blocked the harness, whose `pin.mjs` reads that red text as a refusal.
+  **Replaced by the fact the clock was standing in for**: `login()` always settles, so the only way
+  a caller can be stranded is for it to settle without having answered - which is observable, and is
+  now observed. A slow login is no longer a failed one; a genuinely silent return is reported as
+  what it is. A promise that never settles is deliberately still not covered here: that is a missing
+  deadline on the request, and inventing a verdict in the UI would be the same mistake in a shorter
+  form. The size of `mls.bin` and the seventeen-second checkpoints behind it are filed with their
+  measurements in `docs/wiki/backlog.md`.
+
+- **Every mobile client accused the server of a defect once per heartbeat.** The gateway answers
+  each 8-second ping with `{"type":"pong"}`, which belongs to no handler and never did.
+  `WebMlsService` compared inline and returned; `TauriMlsService` had no such branch, so every one
+  of those frames fell through to `[WS RCV] frame type "pong" reached no handler - the server is
+  sending something this client does not route` - thirteen in ninety seconds on a Mi 9T, for ever,
+  on the one frame the server is required to send. A warning that fires on correct behaviour is the
+  line its reader learns to skip, standing directly in front of the real ones that branch exists to
+  surface. The predicate now lives beside `isChannelEventFrame`, in the file written after the last
+  time a routing rule spelled separately in the two clients silently disagreed, and both clients ask
+  it.
+
+- **A device re-entering several groups at once could join exactly ONE of them, and re-asked for
+  the rest for ever.** The delivery service pops a one-time prekey when a device has one and
+  otherwise serves that device's static `key_package` row - the same bytes, to every caller, until
+  the device next connects. That fallback is not optional: without it a device whose pool ran dry
+  could never be added to a group again. But MLS deletes an ordinary KeyPackage's private bundle the
+  moment a Welcome built on it is processed, so the row was good for one join and dead for every
+  other peer it had already been handed to. Measured on the Mi 9T on 2026-09-06: ten groups
+  re-added in one burst produced one join and nineteen `NoMatchingKeyPackage [n_secrets=3..5]`
+  refusals; the device sent another `welcome_request`, the responder kicked and re-added it on the
+  same dead package, and nothing broke the loop until the next reconnection republished a fallback.
+  The user's report of a notification reading `Nouveau message de <name>` with nothing under it is
+  the same event seen from the shade - the group could not be joined, so the message could not be
+  decrypted. RFC 9420's extensions draft has one answer for exactly this server-side pattern and
+  OpenMLS implements it: a `last_resort` KeyPackage keeps its private bundle after a join. The two
+  kinds now differ in the crypto rather than by convention - one `build_key_package(last_resort)` in
+  `mls-core` with two named entry points, and one `mintKeyPackages()` in place of the four call
+  sites that each minted a fallback by hand (the worker, its two recovery branches, the main-thread
+  path). Two dead Tauri commands that minted a third and fourth kind went with them, as did
+  `replenishKeyPackages`, a one-line wrapper whose only caller was its own test. An empty pool is
+  now announced by the server: it is the only place that can see a client which has stopped
+  replenishing.
+
 - **The one line saying a device's history had been repaired could not say WHICH conversation.**
   `[HISTORY_BUNDLE] N messages received from the inviting peer` was wrong twice on a device
   rejoining forty groups at once: the sender is whichever member the server's random election

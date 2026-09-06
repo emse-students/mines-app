@@ -95,7 +95,7 @@
   "auth_pin_stay_signed_in_desc": "Conserve une copie chiffrée de votre clé d'appareil après la fermeture de l'application, pour ne pas avoir à ressaisir votre PIN. Le PIN lui-même n'est jamais stocké. À n'activer que sur un appareil personnel.",
   "auth_pin_step_verifying": "Vérification du PIN…",
   "auth_pin_step_loading_mls": "Chargement MLS…",
-  "auth_pin_timeout": "Le déverrouillage prend plus de temps que prévu. Veuillez réessayer.",
+  "auth_pin_no_result": "La connexion s'est terminée sans résultat. Veuillez réessayer.",
   "auth_pin_step_resetting": "Réinitialisation du PIN…",
   "auth_server_unreachable": "Impossible de contacter le serveur. Vérifiez votre connexion puis réessayez.",
   "user_search_placeholder": "Rechercher un utilisateur…",

@@ -63,18 +63,89 @@ else holds, a console owned by the user, or hardware that does not exist.
 | What | Kind | Where the substance is |
 | --- | --- | --- |
 | ~~UNLOCK THE CAMPAIGN PHONE~~ **DONE 2026-09-05** (`deviceLocked=0`, measured). What remains is OPTIONAL and the user asked for it: removing the pattern needs the credential, so either they clear it in Settings or it joins `test-accounts.json` like every other one. Retiring the lock costs no key material - both keystore keys are explicitly `setUserAuthenticationRequired(false)`, measured before proposing it | 1 gesture on the device | [P2 - every silent push on the phone fails to decrypt](#p1---a-backgrounded-phone-is-never-told-about-a-message-it-has-already-received-because-the-js-layer-waits-for-a-push-the-server-never-sends-measured-on-device-2026-09-05) |
-| choose how production says it is down - the probe must hit `/api/version`, which needs the database | decision, then ~1 click | [P2 - nothing tells anybody production is down](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click) |
+| set up the external uptime probe that mails - **decided 2026-09-06, mail**; the probe must hit `/api/version` AND `/api/chat-delivery-health`, never the homepage, which answered 200 through both outages | ~1 click in Cloudflare or an uptime service | [P2 - NOTHING TELLS ANYBODY PRODUCTION IS DOWN](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click) |
 | should a dev-ONLY trigger exist - today one push deploys both estates and a broken dev BLOCKS production, by design | decision | [dev.canari-emse.fr becomes a real second environment](#devcanari-emsefr-becomes-a-real-second-environment---decided-2026-08-17) |
 | a fine-grained PAT from an account WITH PUSH ACCESS - the App token was measured refused, ten times | decision | [P1 - no identity CI can mint may ask Dependabot to rebuild a branch](#p1---no-identity-ci-can-mint-may-ask-dependabot-to-rebuild-a-branch-so-a-moved-gate-parks-the-whole-queue---and-the-app-token-was-the-recommendation-this-row-itself-made-measured-2026-09-03) |
 | PostgreSQL 15 -> 18, parked by the user (*"on verra ca plus tard"*); its test also releases `redis` and `garage` | decision | [P2 - PostgreSQL is held at 15](#p2---postgresql-is-held-at-15-because-18-needs-a-migration-nobody-has-performed-after-the-outage-of-2026-09-01) |
 | is a MiGallery application worth building | decision | [post-campaign projects](#post-campaign-projects---decided-not-scheduled) |
-| how `frontend/src-tauri` gets its cargo updates - Dependabot cannot parse it and the fix that would let it is verified only by an Android AND an iOS build | decision | [P1 - two of the six cargo directories are invisible to Dependabot](#p1---two-of-the-six-cargo-directories-are-invisible-to-dependabot-and-one-of-them-is-the-app-that-ships-to-phones-measured-2026-09-02) |
 | rotate `CF_DNS_TOKEN` **and** the cloudflared tunnel run token - both reached a transcript on 2026-09-01 | rotation | agent memory names both; neither may enter this repo |
 | put the BDE 170 EUR tier on sale - an allowlist correctly withholds it and no event will ever fire | 1 click | the verification table above |
 | App Store Connect: the 2.3.6 radio button | 1 click | [mobile](frontend/mobile.md#where-the-submission-stands-and-what-each-half-is-waiting-on) |
 | Lydia's credentials, which Lydia owes | blocked upstream | WP-LYDIA-1 |
 | an Android phone and an iPhone - unblocks the whole verification table above and the campaign | hardware | [device-verification](device-verification.md) |
 | copy `canari-harness/` to the second machine to resume the campaign; **SETUP-4's 2FA is no longer owed**, the test accounts carry no MFA | 1 copy | [cross-client-campaign-resume](cross-client-campaign-resume.md) |
+
+## FOUR DECISIONS TAKEN BY THE USER, 2026-09-06
+
+Asked and answered in one pass, so none of them is waiting any more. Each names what it now costs
+somebody to DO, which is the only part that was ever the user's.
+
+### Production says it is down BY MAIL - decided 2026-09-06
+
+**The entry that carries this is above and is unchanged**
+([P2 - NOTHING TELLS ANYBODY PRODUCTION IS DOWN](#p2---nothing-tells-anybody-production-is-down-and-both-outages-of-2026-09-01-were-reported-by-the-user-owed-to-the-user-a-decision-then-one-click));
+this records only the answer. **A first draft of this block claimed that entry had gone missing from
+the file and rewrote it from scratch - it had not, the heading is upper-case and a case-sensitive
+grep missed it.** Recorded because a session that invents a replacement for a page it failed to find
+is a worse failure than the one it thinks it is fixing.
+
+**THE ENTRY'S OWN ANALYSIS DECIDES WHERE THE PROBE LIVES, AND IT IS NOT HERE.** It says the cheapest
+honest option is an external probe on `/api/version` and `/api/chat-delivery-health` - Cloudflare
+already fronts all three zones and can do it, or any uptime service - and that *"building a poller in
+this repository to replace them would be exactly the waste that rule names"* (one-off actions go to
+the user). Mail is what such a service sends. So the decision does not turn into code here, and the
+click stays the user's.
+
+**Both paths must be probed and neither may be the homepage.** `frontendDist` is embedded, so nginx
+served **200** throughout both outages while `auth_db` was unreachable: an external check reading the
+homepage would have reported a healthy site for 33 minutes. `/api/version` needs the database.
+
+**AND MAIL WAS REFUSED ONCE ALREADY, ON `mitv`, which has to be said or this reads as a reversal.**
+There, `MAILADDR` would have delivered into a spool nobody opens, on a host with postfix and exim4
+both inactive and `monit` holding no destination - *a check that cannot reach its reader reports
+health*. An uptime service is a different sender entirely: a real MTA, a mailbox the user reads, and
+above all **not on the box that is down**, which is the requirement no probe hosted on `canari` or
+`mitv` could ever have met.
+
+**What IS code, and is owed whichever service is chosen** - the entry already names it: CD's
+`Health Check` and `Wait for services to be healthy` run AFTER the migration step, so a deploy that
+fails on migrations never reaches them and reports only *"migrations failed"* - true, and silent
+about the estate being down.
+
+### ONE relay-path call, by hand, and no CALL runner
+
+**Decided 2026-09-06.** The SFU's P1 says what closes it in as many words - *"what settles it is one
+call, and only one call"* - so that is what will be taken: two peers, audio and video, over the
+relay path with TURN configured as production configures it. `CALLS_ENABLED` is flipped in the LOCAL
+tree only and put back; the five switches that move together at a real revival are untouched.
+
+**The twenty CALL rows stay NEVER RUN, deliberately.** They are the largest block of unwritten
+campaign left, and the user's ranking has not changed since 2026-09-01: *"les appels video et audio
+ne sont pas la priorite"*. So the campaign cannot be called finished, and that is an honest state
+rather than a gap - the row that matters to a SHIPPED build is the one being taken by hand.
+
+### `frontend/src-tauri` stays declared, and gets a trigger with a name
+
+**Decided 2026-09-06.** Not option 1 (`links` removed): it plausibly drops the plugin's native half,
+which COMPILES and fails at runtime on a phone - the exact class of all three iOS defects - and only
+an Android AND an iOS build could clear it, while this workstation can never produce the second. Not
+option 2 either: an unmanaged mobile artefact is the opposite of *"un projet qui peut vivre tout
+seul"*.
+
+So option 3, and the half that makes it real is the trigger: a scheduled job running
+`cargo update --dry-run` in `frontend/src-tauri` and OPENING AN ISSUE when the tree is behind.
+"Somebody remembers" is not a mechanism. The gate that stops the two directories being forgotten
+already exists (`dependabot-cargo-reach.test.sh`); what is added is the thing that notices the
+updates nobody can open a pull request for.
+
+### The phone works the notification P1 first
+
+**Decided 2026-09-06.** Ahead of writing the NOTIF rung, ahead of HEAL-A1, and ahead of the
+community-notification P2: the measurement that closes a P1 already fixed in the tree beats the
+runner that would let a new one be found. Checks K and K2 and NOTIF-6b ride with it - all three have
+their procedures written and all three need the same backgrounded phone.
+
+---
 
 **Firebase owes nothing** (asked 2026-09-02): dev reuses the existing `fr.emse.canari` app, and the
 `DEV_*` push secrets are disposition `warn`, so their absence has never blocked a deploy - the fact
@@ -2607,6 +2678,22 @@ client", never "clean on the server".
 
 ### P1 - a device asks for a Welcome for ever, and the member that answers RESETS the row that would have let it heal itself (measured on prod 2026-09-01)
 
+> **THE "FOR EVER" HAS A MECHANISM NOW, FOUND ON 2026-09-06, AND IT IS FIXED.** The loop above
+> describes a device asking and a responder answering; what nobody had asked was why the ANSWER did
+> not land. The delivery service serves a device's static `key_package` row to every caller once its
+> one-time pool is empty - the same bytes, until that device next connects - and MLS deletes an
+> ordinary KeyPackage's private bundle at the first Welcome built on it. So a device re-entering
+> several groups at once could join exactly ONE: the Mi 9T at 18:01:27 got ten Welcomes on one
+> fallback, joined the first and answered nine with `NoMatchingKeyPackage [n_secrets=3..5]`,
+> nineteen times over. It then re-asked, the responder kicked and re-added it on the same dead
+> package, and the loop had no exit. The fallback is now minted with the MLS `last_resort` extension
+> (`mls-core/tests/last_resort_key_package.rs`, `CHANGELOG.md`,
+> [mls-protocol](protocols/mls-protocol.md#the-two-kinds-of-key-package)). **This does not close the
+> entry**: the reset-the-healing-row half and the prod measurement below are untouched, and the
+> `[KICK] Stale leaf` sighting is still a device asking for something it should not need. It does
+> mean the local reproduction the entry asks for was standing on a second defect the whole time, so
+> anything measured before 2026-09-06 was measuring both.
+
 **SEEN AGAIN ON THE LOCAL ESTATE, 2026-09-06 01:03** - the first sighting outside production, and it
 is the only line of dirt on an otherwise clean HEAL-REVOKE-5: `[KICK] Stale leaf <the phone> removed
 from ba048e26…` on W1. That is the documented answer - a `welcome_request` for a group whose leaf is
@@ -4488,6 +4575,59 @@ appearance items, all three are post-ladder, and all three want the same pass ov
 than three local patches.
 
 ## Storage and retention
+
+### P1 - `mls.bin` is 19.5 MB on a real phone, one checkpoint costs 17 SECONDS, and the PIN gate tells the user the unlock failed while it is still working (measured on the Mi 9T, 2026-09-06)
+
+Three lines from one launch of `0.16.4` on the Mi 9T, all from the same minute:
+
+```
+D mls_core::state: save_state: returning cached CBOR snapshot (19427791 bytes)
+I [MLS] Encrypted state checkpoint persisted. (17115 ms)
+I [MLS] Encrypted state checkpoint persisted. (19691 ms)
+```
+
+`stat mls.bin` on the device: **19 548 753 bytes**. Three checkpoints in that launch, 17.1 s, 17.1 s
+and 19.7 s. Nothing here is contended or unlucky - it is the cost of sealing 19.5 MB on this SoC,
+and it is paid again on every structural checkpoint.
+
+**WHAT IT COSTS THE USER, AND WHY IT IS A P1 RATHER THAN A PERFORMANCE NOTE.** `handlePinSubmit`
+arms a 10-second watchdog whose comment calls it a "temporal safety net" for "an unexpected early
+return or a hung network call". On this device the login legitimately takes ~19 s (`[pin] settled in
+18715ms`, measured twice), so the watchdog fires EVERY TIME, sets `pinError = m.auth_pin_timeout()`
+- *"Le deverrouillage prend plus de temps que prevu. Veuillez reessayer."* - and unblocks the
+spinner, while the login underneath goes on to succeed. The user is told, in red, that the unlock
+failed; retrying starts a second one. Seen on screen twice today (`scratchpad/shot.png`), and it is
+the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unlock this phone.
+
+**Two questions, and they had different answers.**
+
+1. ~~**The watchdog is a clock standing in for a proof.**~~ **ANSWERED AND FIXED, 2026-09-06.** The
+   enumeration came out the first way: `login()` always settles, and the only way a caller can be
+   stranded is for it to settle without having called back - which is observable rather than
+   guessable. The clock is gone and that fact is read instead; a slow login is no longer a failed
+   one. Story in `CHANGELOG.md`, guards in `sessionExpiredRelease.test.ts`, validated in negative
+   against two mutations. **The twelve seconds themselves are untouched, which is question 2.**
+2. **19.5 MB is the real question and it is not answered.** It has not been established what
+   dominates the blob. One candidate has a mechanism already visible in the code:
+   `generate_key_packages` writes every bundle to the provider's storage and NOTHING deletes them
+   locally. `deleteAllOneTimePrekeys()` clears the SERVER's pool, and on every fresh start the client
+   then mints 50 more - so a device that has restarted often keeps every unconsumed bundle it has
+   ever generated. `TauriMlsService`'s own docblock already worries about "bloating the Rust state
+   with hundreds of unused private key bundles (each ~400 bytes)", which is the awareness without
+   the prune. That is a HYPOTHESIS: measure bytes-per-key-package against `save_state` in a
+   `mls-core` test, then measure what a fresh device's blob weighs per group, before touching
+   anything. **A prune must not be written before the population is measured** - and note that the
+   last-resort fallback (2026-09-06) is one bundle that must now be KEPT.
+
+**This is invisible to every gate in this repository.** The desktop clients carry a small state and
+the emulator never accumulates one; only a phone that has lived through a campaign shows it. It
+belongs with the other three iOS/Android defects that no green build could have caught.
+
+**WHAT REMAINS AFTER THE UI HALF WAS FIXED**: the 19.5 MB blob and the 17-second checkpoints. The
+user no longer sees a false failure, but the unlock still takes ~22 s on this handset and every
+structural checkpoint still costs 17 s of CPU. The measurement owed is the one named above - bytes
+per key package against `save_state`, then the per-group weight of a fresh device's blob - and it
+must come before any prune is written.
 
 ### P2 - the MLS snapshot version is a PER-DOCUMENT counter compared ACROSS documents, so a second tab's write is dropped on a collision (measured on TAB-4, 2026-09-05)
 
