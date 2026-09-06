@@ -4576,6 +4576,82 @@ than three local patches.
 
 ## Storage and retention
 
+### P1 - the phone's own send ratchet rewound and BOTH peers refused the frame - the "outbox hole" section 8 says is still owed, measured in the field for the first time (Mi 9T, 2026-09-06)
+
+Read off W1 and W2 simultaneously, as `severe`, during an otherwise clean NOTIF-1b:
+
+```
+[MLS] LOST frame for 2bd5add9... from f7a9bb80...: generation consumed but this frame
+      was never processed - the sender's ratchet rewound (SecretReuseError, frame 5p:1rurzth)
+MLS decryption failed at exactly its own epoch, so no redelivery can help:
+      group=2bd5add9... msg_epoch=139 group_epoch=139 err=SecretReuseError
+```
+
+`f7a9bb80...` is the PHONE, and the frame was its read receipt for the warm-up message. Same epoch on
+both sides, so this is not an epoch gap: a generation the peers had already consumed was re-issued.
+Both peers then paid a full history reconciliation to discover they already agreed.
+
+**THIS IS NOT A NEW DIAGNOSIS - IT IS THE ONE
+[mls-desync-prevention](protocols/mls-desync-prevention.md#8-client---no-state-replacement-may-rewind-this-devices-own-send-ratchet)
+ALREADY NAMES AS OPEN**, in as many words: *"`liveMutations` and every watermark compared against it
+are per-page-session state, while the OUTBOX is durable... What is still owed for the outbox hole is
+therefore NOT an awaited checkpoint. The shape that fits the cost is a durable record of what the
+ratchet has already spent, written per send at the price of a key/value write rather than a snapshot,
+and consulted at load."* That record has not been written. What is new here is that the hole has now
+been SEEN on hardware, by two independent observers, in a run doing nothing exotic.
+
+**AND THE 19.5 MB `mls.bin` IS WHAT MAKES IT LIKELY RATHER THAN THEORETICAL** - the two entries above
+are one defect seen from two ends. `checkpointAfterSend` deliberately does not await, which was the
+right call at the measured 1.5 s it cost in August. On this device the same checkpoint now costs
+**17.1 / 17.1 / 19.7 seconds**. So between a send and its state reaching disk there is a window of
+up to twenty seconds in which any death of the process - `am kill`, an OOM, a reinstall, the user
+swiping the app away - restores an `mls.bin` behind frames that have already left. The window was
+sized for 1.5 s and is now more than ten times that, on the only kind of device where the OS kills
+processes routinely.
+
+**What is owed, in order.**
+
+1. **The spent-generation record**, as section 8 already specifies it: per send, a key/value write,
+   consulted at load, and the burn - which is already designed, shipped and safe by
+   `SenderRatchetConfiguration::new(2000, 2000)` - applied against the deficit it finds. Nothing new
+   needs inventing; it needs writing.
+2. **The blob measurement above**, because it decides whether the window can be shrunk at all or
+   only survived.
+
+**Do NOT "fix" this by awaiting the checkpoint.** That was measured and refuted in August at 1.7 s
+per send, and it would now cost seventeen. The invariant is not "the state is durable at send time"
+but "a state restored behind a frame that left is RECOGNISED and repaired", which is a counter and a
+burn.
+
+### P2 - the notification QUICK ACTIONS exist only while the app is DEAD, which is why check K's backgrounded case has never been performable (measured on the Mi 9T, 2026-09-06)
+
+Two posters write Canari's Android notifications and only one of them is the app's own.
+
+| | posts when | style | quick actions |
+|---|---|---|---|
+| `CanariFirebaseMessagingService.showNotification` | a push arrives - i.e. the app is killed or its ACK was late | `MessagingStyle`, stacked, self `Person` | `buildReplyAction` + `buildMarkReadAction`, always, on any non-`channel_` conversation |
+| `useNotifications.svelte.ts` -> `sendNotification` | the JS layer has the frame - i.e. the app is ALIVE, foreground or background | whatever `tauri-plugin-notification` builds | **none** |
+
+The notification record read off the device for a real message received while backgrounded carries
+no `actions` at all, and the shade drew no `Repondre`. So the gesture `device-verification.md` step
+4 asks for **cannot be made** in the state check K is written about, which is a better explanation of
+why that re-measurement has sat unmade since 2026-08-30 than "nobody got round to it": the 2026-08-30
+PASS was taken on a KILLED app, where FCM posts and the actions exist.
+
+**This is not the same defect as the missing body** (fixed 2026-09-06 by giving every `sendNotification`
+a `largeBody`; see `CHANGELOG.md`). That one was the plugin dropping text it had been handed; this is
+the app never asking for the actions on this path at all. WP-XP-1 shipped them believing they were on
+every message notification.
+
+**What is owed before anything is written**: decide whether the JS path should post through the
+Kotlin service - which already builds the right thing, stacks by conversation, and refreshes the
+badge - or grow its own actions. The first removes a poster rather than teaching a second one the
+same lesson, and is the shape the rest of this codebase has converged on everywhere else; it needs a
+Tauri command bridging into `showNotification` and an answer to what happens on desktop, where
+neither the service nor FCM exists. **Check K stays unmeasurable in the backgrounded case until this
+is decided**, and `archive/k.mjs` records `SKIPPED` rather than `FAIL` when no reply is made, so a
+run cannot be mistaken for a product verdict.
+
 ### P1 - `mls.bin` is 19.5 MB on a real phone, one checkpoint costs 17 SECONDS, and the PIN gate tells the user the unlock failed while it is still working (measured on the Mi 9T, 2026-09-06)
 
 Three lines from one launch of `0.16.4` on the Mi 9T, all from the same minute:

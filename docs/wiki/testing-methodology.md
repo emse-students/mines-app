@@ -2069,6 +2069,27 @@ rate has found something.
 These are not faults of judgement - they are platform behaviours that will be mistaken for defects
 by anyone who has not met them.
 
+- **A DUMP IS NOT A SCREEN, AND EVERY NOTIFICATION CHECK HERE READ THE DUMP.** They match on `full`,
+  the whole `NotificationRecord` block, so `android.text` holding the right string satisfies all of
+  them. On 2026-09-06 a Mi 9T drew a Canari notification as a sender's name with nothing under it
+  while that same record carried the decrypted message - and NOTIF-1b had just passed its
+  `itCarriedTheMessageAndNotJustASenderName` clause on exactly that. `GENERIC_BODIES` could not help:
+  the body was not generic, it was invisible. The cause is mechanical (`InboxStyle` with zero lines
+  renders `textLines`, never `contentText`) and so is the test - `phone.bodyIsDrawn` reads the
+  template out of the same dump, and `drawnHits` is what a preview clause must now count. **The two
+  counts are kept apart deliberately: hits without drawn hits IS the finding.** What found it was
+  looking at the shade, which no amount of parsing would have done.
+
+- **A COLD START IS NOT A STEADY STATE, AND A ROW ABOUT A BACKGROUNDED APP MUST PROVE ONE.** Straight
+  after an `install -r`, NOTIF-1b sent its marker while the app was still draining fifty pending
+  invitations; the frame never reached the JS layer, the ten-second push backstop delivered at 29 s,
+  and the row reported `itBeatTheDeferredPushWindow` unmet - accusing a notification path that had
+  not been asked yet. The same row had passed in 2190 ms an hour earlier on a warm app. **The fix is
+  not a sleep**, which is a guess about one handset that stops being true on the next: a warm-up
+  message received in the FOREGROUND is the app demonstrating that its socket is up and routing, and
+  it exercises the very path under test. Its clause is named
+  `theAppWasRoutingBeforeItWasHidden` so a reader can tell a rig precondition from a product verdict.
+
 - **MIUI CUTS A BACKGROUNDED APP'S NETWORK OUTRIGHT, AND EVERY ROW ABOUT A PHONE IN A POCKET IS
   MEASURING THAT UNLESS IT SAYS OTHERWISE.** Measured on the Mi 9T on 2026-09-06 with one fetch,
   issued from the same page over CDP (which travels on adb, not on the app's network, so it does not
