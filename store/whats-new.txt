@@ -1,9 +1,12 @@
-version: 0.16.3
-Cette version ne change rien a ce que vous voyez dans l'application.
+version: 0.16.4
 
-Tout ce qui a bouge est la machinerie qui la publie. Une panne du registre de paquets etait
-comptee comme une faille de securite et bloquait toute mise a jour ; elle est maintenant
-distinguee d'une vraie alerte. Les controles de securite peuvent desormais retenir une
-modification. Et la publication ne se bloque plus sur une version preparee puis oubliee.
+Les notifications affichent de nouveau le contenu du message, et plus seulement le nom de
+l'expediteur.
 
-Rien de tout cela ne se voit. C'est le but.
+Le deverrouillage par code ne signale plus un echec alors qu'il reussit, et ne peut plus etre
+ferme sans issue.
+
+Un appareil qui revient en ligne retrouve son historique de maniere plus fiable : plusieurs
+pertes de messages a la reconnexion sont corrigees.
+
+Une conversation en cours de suppression n'empeche plus d'en rouvrir une avec la meme personne.
