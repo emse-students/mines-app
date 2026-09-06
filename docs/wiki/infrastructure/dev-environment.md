@@ -356,7 +356,7 @@ follows.
 the estate up: `up -d` alone sees no reason to recreate a container whose tag has not changed. It is
 also why a service a release does not rebuild keeps the image it has - that is what a selective
 rebuild means, and it is why the change detector's baseline must be the previous PRE-RELEASE and not
-the previous release of any kind ([cicd](../cicd.md#deploy-an-estate-deployyml)).
+the previous release of any kind ([cicd](../cicd.md#build-and-deploy-an-estate-buildyml-serve-devyml-serve-prodyml)).
 
 ### The deploy is two scripts, and the order is load-bearing
 

@@ -123,7 +123,27 @@ const BUILD_TERMINAL_BAD = new Set(['INVALID', 'FAILED']);
  * The version states an automated run may write into. Anything else is a version a human is
  * already working on, or one the store has published, and both are answers rather than obstacles.
  */
-const VERSION_EDITABLE = new Set([
+/**
+ * APPLE SAID NO, WHICH IS NOT THE SAME AS NOBODY HAVING ASKED YET.
+ *
+ * These four are inside `VERSION_EDITABLE` below and that is correct for the question IT asks -
+ * *may this release write into the slot?* - where a rejected version and an unsubmitted one are
+ * equally writable. They are a set of their own because a second reader asks a different
+ * question. `tools/store-divergence/` reports why the last stable has not reached a store, and
+ * "Apple refused it" and "it was never submitted" are the two causes a human acts on
+ * differently: one needs a fix, the other needs a re-run. A report that cannot separate the
+ * causes it names is a report somebody has to reproduce by hand.
+ *
+ * ONE LIST, SPREAD INTO THE UNION BELOW, so the two readers cannot drift apart.
+ */
+export const VERSION_REJECTED = new Set([
+  'DEVELOPER_REJECTED',
+  'REJECTED',
+  'METADATA_REJECTED',
+  'INVALID_BINARY',
+]);
+
+export const VERSION_EDITABLE = new Set([
   'PREPARE_FOR_SUBMISSION',
   // `READY_FOR_REVIEW` IS NOT A VERSION APPLE HAS. It is a version that has been ATTACHED to a
   // review submission nobody has sent - the state the App Store Connect UI leaves behind when a
@@ -137,13 +157,10 @@ const VERSION_EDITABLE = new Set([
   // the previous release because it is gated on both stores. An occupied slot nobody can free
   // without a click blocks EVERY later stable, which is the queue this project does not keep.
   'READY_FOR_REVIEW',
-  'DEVELOPER_REJECTED',
-  'REJECTED',
-  'METADATA_REJECTED',
-  'INVALID_BINARY',
+  ...VERSION_REJECTED,
 ]);
-const VERSION_IN_REVIEW = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE']);
-const VERSION_DONE = new Set([
+export const VERSION_IN_REVIEW = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'PENDING_DEVELOPER_RELEASE']);
+export const VERSION_DONE = new Set([
   'READY_FOR_SALE',
   'PENDING_APPLE_RELEASE',
   'PROCESSING_FOR_APP_STORE',

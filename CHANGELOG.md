@@ -11,6 +11,37 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Added - a daily report that says when a stable reached the web but not a store
+
+Making the App Store deferral green fixes the web being held hostage by a review queue, and creates
+a gap: a release can now end with the build in TestFlight, never submitted, and nothing would say
+so. **Making a failure quiet without adding a report is how a three-day silence becomes a permanent
+one.**
+
+`tools/store-divergence/` asks both stores what they hold for the last stable GitHub release, and is
+the `stores` job of `scheduled.yml` (daily, 09:00 UTC, and on the dispatch menu). A red run is the
+report - nothing pages anybody in this estate, and `gh run list` is what gets read.
+
+It refuses to conflate the four causes, because a human acts on each differently: `pending` (with
+Apple, who review in days) is a PASS, since a daily report that calls a normal review a problem is
+one its reader learns to skip; `not-submitted` and `rejected` each fail with the errand named; and
+`unknown` - the report could not look - fails too, because a credential that expires would otherwise
+turn the whole check into a green light.
+
+Apple's rejection states became `VERSION_REJECTED` in `submit.mjs` rather than a second list here.
+They stay inside `VERSION_EDITABLE`, whose question - *may this release write into the slot?* -
+treats a rejected version and an unsubmitted one identically and correctly; the new set is the
+finer distinction the report needs, spread into the old one so the two readers cannot drift.
+
+One thing was measured rather than assumed: Play's release `name` has two formats on the real tracks
+(`"0.16.5"` from our pipeline, `"10012 (0.10.12)"` from Play's own older naming). An exact match
+alone reports the second absent; a substring match alone matches `0.16.5` inside `0.16.50`. Both,
+and the trap, are asserted.
+
+**Also fixed on the way:** `ci.yml`'s change detector named `deploy.yml` - a file that no longer
+exists - and named none of the three that replaced it, so a change to the production estate would
+not have run the suite that guards it.
+
 ### Changed - the release graph draws no impossible rows, and asks the release kind once
 
 **What the user saw.** *"Je vois beaucoup d'étapes dans le graphe github actions. N'y a-t-il pas plus
