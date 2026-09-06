@@ -142,7 +142,7 @@ One QUESTION each, composed of gestures, ending in a verdict in `results.ndjson`
 | `archive/msg9.mjs` | MSG-9 - the RECEIVER is offline when the message is sent. |
 | `archive/multi.mjs` | MULTI - one user, two devices. Rung 12 of the ladder. |
 | `archive/mut.mjs` | MUT-1..21 - message mutation (edit, delete, react, pin) on both transports. |
-| `archive/notif.mjs` | NOTIF-4 / NOTIF-4b / NOTIF-9 / NOTIF-10 / NOTIF-11 - the notification surface, one check per run. |
+| `archive/notif.mjs` | NOTIF-1b / NOTIF-4 / NOTIF-4b / NOTIF-9 / NOTIF-10 / NOTIF-11 - the notification surface, one |
 | `archive/notif7.mjs` | NOTIF-7 - tapping a notification deep-links into the RIGHT conversation. Run TWICE. |
 | `archive/pinrows.mjs` | PIN - the encryption gate, one row per invocation. |
 | `archive/read.mjs` | READ-1..10 - MLS read receipts: the sidebar unread badge, and the sender's own |
