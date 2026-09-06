@@ -92,6 +92,10 @@ being different from the other two, and nothing outside Authentik's own database
 `fr.emse.canari://callback` is on all three because the SAME packaged app talks to all three: a
 build selects its estate with `VITE_AUTHENTIK_CLIENT_ID` and an API URL, never with an identifier.
 
+**That rule covers `grant_types` too, and the two sections below are what happens when it does not.**
+On 2026-09-07 `Canari Dev` differed from its siblings in BOTH fields at once, and the first fault
+hid the second. When comparing providers, compare every field, not the one the symptom names.
+
 ### The one redirect URI a mobile client needs, added by hand - `Canari Local` 2026-09-04, `Canari Dev` 2026-09-07
 
 Both providers carry `fr.emse.canari://callback` as an **authorization** redirect URI with
@@ -149,6 +153,69 @@ asserts that the scheme `oidcRedirectUri()` builds is one `tauri.conf.json` actu
 would have failed the day somebody wrote `fr.emse.canari.dev` expecting the app to follow. It
 cannot see Authentik's database, which does not live in this repository - this page is the only
 thing that protects that half.
+
+
+### `Canari Dev` permitted NO grant type, so dev login was refused for everybody - fixed 2026-09-07
+
+**Measured, not suspected.** `OAuth2Provider.objects.get(pk=10).grant_types` was `[]`. `Canari`
+(pk 1) and `Canari Local` (pk 11) both carry the full list authentik creates a provider with:
+
+```
+['authorization_code', 'hybrid', 'implicit', 'client_credentials', 'password',
+ 'urn:ietf:params:oauth:grant-type:device_code', 'refresh_token']
+```
+
+`check_grant` in `authentik/providers/oauth2/views/authorize.py` raises
+`AuthorizeError(error="invalid_request")` when `self.grant_type not in self.provider.grant_types`,
+and an empty list matches nothing. So EVERY authorization against `Canari Dev` is refused, on every
+redirect URI - **the web one included**:
+
+```sh
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+  "https://auth.canari-emse.fr/application/o/authorize/?client_id=6cNHJ...&redirect_uri=https%3A%2F%2Fdev.canari-emse.fr%2Fauth%2Fcallback&response_type=code&scope=openid+profile&state=probe"
+# 302 https://dev.canari-emse.fr/auth/callback?error=invalid_request&error_description=The%20request%20is%20otherwise%20malformed
+```
+
+**It was hidden behind the redirect URI defect above.** A request that fails
+`check_redirect_uri` never reaches `check_grant`, so while the mobile URI was missing, this second
+fault could not be seen from a phone - and fixing only the first moves a tester from "Redirect URI
+Error" to "invalid_request" with no login either way. Two faults on one provider, stacked, and the
+outer one masked the inner one: that is why the fix was verified by PROBE rather than by re-reading
+the field that had just been written.
+
+**A custom scheme also changes what an error LOOKS like, which is worth knowing before diagnosing
+one.** Authentik reports an `AuthorizeError` by redirecting it to the client's `redirect_uri`, and
+Django's `HttpResponseRedirect` allows `http`, `https` and `ftp` only. So on `fr.emse.canari://`
+the redirect raises `DisallowedRedirect` and the client sees a bare **400** with no `error=`
+parameter at all, while the same fault on the web URI arrives as a readable
+`302 ...?error=invalid_request`. **To read the real error behind a mobile 400, replay the request
+against the provider's https redirect URI.** The line to look for on the box is
+`django.security.DisallowedRedirect` - "Unsafe redirect to URL with protocol 'fr.emse.canari'".
+
+**The remedy** was to give pk 10 the same list as its two siblings, copied from pk 1 rather than
+retyped, with an assertion that pk 1 and pk 11 agreed before copying either. It is a hand mutation
+on a production box and is owed to the restore path exactly like the URIs above: **a restore from a
+backup predating 2026-09-07 brings `Canari Dev` back with an empty `grant_types` and no dev login at
+all, web or mobile.**
+
+**What proves it, and what does not.** Re-reading the field after writing it proves only that the
+write landed - it says nothing about the second fault waiting behind the first. The check that
+settles it is the probe, on BOTH redirect URIs, and the answer to look for is a **302 to
+`/if/flow/miconnect-auth/`** rather than any 2xx or 4xx:
+
+```sh
+CID=<the Canari Dev client_id>
+for uri in "https://dev.canari-emse.fr/auth/callback" "fr.emse.canari://callback"; do
+  enc=$(python -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$uri")
+  curl -s -o /dev/null -w "$uri -> %{http_code} %{redirect_url}\n" \
+    "https://auth.canari-emse.fr/application/o/authorize/?client_id=$CID&redirect_uri=$enc&response_type=code&scope=openid+profile&state=probe"
+done
+```
+
+Run it against any provider on this box after touching it. It needs no account, no secret and no
+device, and it distinguishes all three failure shapes: a `400` with `DisallowedRedirect` in the log
+(mobile scheme, some other fault), a `302 ...?error=<code>` (the fault, readable) and a `302
+/if/flow/...` (the provider is willing, and what is left is the user's own credentials).
 
 ## Login page branding
 

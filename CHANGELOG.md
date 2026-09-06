@@ -11,11 +11,12 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
-### Fixed - logging in was impossible on every iOS and Android TESTER build
+### Fixed - nobody could log in to the dev estate, on any client
 
 A TestFlight tester on the pre-release build was refused at login with **"Redirect URI Error"**,
 three times, and the app could do nothing about it: **the fault was in the identity provider's
-configuration, not in the client.**
+configuration, not in the client.** Behind it sat a second fault that broke the dev estate's WEB
+login as well, for everybody, and that the first one had been hiding.
 
 A packaged mobile client does not come back from the IdP to a URL, it comes back to its own custom
 scheme, `fr.emse.canari://callback`. A pre-release build authenticates against the `Canari Dev`
@@ -30,6 +31,15 @@ left in place it tells the next reader that a `.dev` scheme exists. Making the d
 `.dev://` was the alternative and was rejected: it needs a separate bundle identifier, hence its own
 provisioning profile, App Store record and scheme declaration, where today a dev and a prod build
 differ only by `client_id` and API URL.
+
+**And that only uncovered the real one.** With the URI accepted, the same request still failed -
+`invalid_request`, "The request is otherwise malformed" - on the web callback too. `Canari Dev` had
+`grant_types = []`: it permitted **no OAuth grant at all**, so every authorization against the dev
+estate was refused whatever client asked. Its two siblings both carried the normal list; it was
+given the same one. A request that fails the redirect-URI check never reaches the grant check, so
+from a phone this was invisible until the first fault was gone - which is why the fix was verified
+by probing the authorize endpoint rather than by re-reading the field that had just been written.
+Both callbacks now answer `302` to the login flow.
 
 **No gate here could see it, and one now can.** `frontend/src/lib/mobile/oidcRedirectScheme.test.ts`
 asserts that every `scheme://host` `oidcRedirectUri()` returns is one `tauri.conf.json` actually
