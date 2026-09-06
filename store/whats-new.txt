@@ -1,12 +1,7 @@
-version: 0.16.4
+version: 0.16.5
 
-Les notifications affichent de nouveau le contenu du message, et plus seulement le nom de
-l'expediteur.
+Correction d'un blocage a la connexion : l'application refusait le code de deverrouillage en
+affirmant qu'il ne correspondait pas au compte, alors qu'il etait correct. Aucun code n'avait
+change, et aucune donnee n'a ete perdue.
 
-Le deverrouillage par code ne signale plus un echec alors qu'il reussit, et ne peut plus etre
-ferme sans issue.
-
-Un appareil qui revient en ligne retrouve son historique de maniere plus fiable : plusieurs
-pertes de messages a la reconnexion sont corrigees.
-
-Une conversation en cours de suppression n'empeche plus d'en rouvrir une avec la meme personne.
+Il suffit de se reconnecter normalement avec son code habituel.
