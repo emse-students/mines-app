@@ -1,37 +1,50 @@
-import { replenishKeyPackages } from './keyPackages';
+import { mintKeyPackages } from './keyPackages';
 
-function makeService(overrides: Record<string, unknown> = {}) {
+/**
+ * `replenishKeyPackages` was tested here until 2026-09-06 and deleted with these tests: it wrapped
+ * `mlsService.generateKeyPackage` in one line, its docblock called itself "a single entry point for
+ * the connection layer", and the connection layer called the service directly. Its only caller was
+ * this file.
+ */
+function makeClient() {
   return {
-    generateKeyPackage: vi.fn().mockResolvedValue(new Uint8Array([9])),
-    ...overrides,
-  } as any;
+    generate_last_resort_key_package: vi.fn(() => new Uint8Array([0xfa])),
+    generate_key_packages: vi.fn((n: number) =>
+      Array.from({ length: n }, (_, i) => new Uint8Array([i]))
+    ),
+  };
 }
 
-describe('replenishKeyPackages', () => {
-  it('appelle generateKeyPackage avec le PIN fourni', async () => {
-    const mls = makeService();
-    await replenishKeyPackages(mls, 'secret-pin');
-    expect(mls.generateKeyPackage).toHaveBeenCalledWith('secret-pin');
+describe('mintKeyPackages', () => {
+  it('mints the fallback as LAST RESORT, which is the whole reason this helper exists', () => {
+    const client = makeClient();
+    const { fallback } = mintKeyPackages(client, 0);
+    expect(client.generate_last_resort_key_package).toHaveBeenCalledTimes(1);
+    // The ordinary minter must not have been touched for the fallback: the delivery service serves
+    // that one package to every peer that finds the pool empty, and MLS deletes an ordinary
+    // package's private bundle at the first Welcome built on it.
+    expect(client.generate_key_packages).not.toHaveBeenCalled();
+    expect(fallback).toEqual(new Uint8Array([0xfa]));
   });
 
-  it('appelle generateKeyPackage exactement une fois par appel', async () => {
-    const mls = makeService();
-    await replenishKeyPackages(mls, 'p');
-    await replenishKeyPackages(mls, 'p');
-    expect(mls.generateKeyPackage).toHaveBeenCalledTimes(2);
+  it('mints the pool as ORDINARY one-time prekeys', () => {
+    const client = makeClient();
+    const { poolPackages } = mintKeyPackages(client, 3);
+    expect(client.generate_key_packages).toHaveBeenCalledWith(3);
+    expect(poolPackages).toHaveLength(3);
   });
 
-  it('propage les erreurs de generateKeyPackage', async () => {
-    const mls = makeService({
-      generateKeyPackage: vi.fn().mockRejectedValue(new Error('WASM out of memory')),
-    });
-    await expect(replenishKeyPackages(mls, 'p')).rejects.toThrow('WASM out of memory');
+  it('asks for no pool at all when the server already holds enough', () => {
+    const client = makeClient();
+    const { poolPackages } = mintKeyPackages(client, 0);
+    expect(client.generate_key_packages).not.toHaveBeenCalled();
+    expect(poolPackages).toEqual([]);
   });
 
-  it('réussit sans lancer si generateKeyPackage retourne undefined', async () => {
-    const mls = makeService({
-      generateKeyPackage: vi.fn().mockResolvedValue(undefined),
-    });
-    await expect(replenishKeyPackages(mls, 'p')).resolves.not.toThrow();
+  it('materialises the pool, which the WASM layer returns as a lazy js_sys::Array', () => {
+    const client = makeClient();
+    const { poolPackages } = mintKeyPackages(client, 2);
+    expect(Array.isArray(poolPackages)).toBe(true);
+    expect(poolPackages[0]).toBeInstanceOf(Uint8Array);
   });
 });

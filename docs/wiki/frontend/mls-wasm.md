@@ -28,7 +28,7 @@ frontend/src/lib/mls-client/   # TypeScript wrapper layer
 ├── IMlsService.ts          # The interface both platforms implement
 ├── mlsPlatform.ts          # Which platform is live, resolved once
 ├── initializeConnection.ts # syncAfterConnect(), single-pass reconnect
-├── keyPackages.ts          # replenishKeyPackages(), prekey rotation
+├── keyPackages.ts          # mintKeyPackages(): the fallback (last-resort) vs the pool
 ├── messagePipeline/        # handleWelcome, handleKnownGroup, handleUnknownGroup
 │
 │   # Inbound - receiving, decrypting, and not losing a frame

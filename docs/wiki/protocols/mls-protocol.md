@@ -513,11 +513,45 @@ enqueueMessage()      enqueueMessage()
 
 ## Key packages
 
+### The two kinds of key package
+
+A device publishes two kinds, and **the difference is in the crypto, not in the naming**. Both are
+minted by one builder, `MlsManager::build_key_package(last_resort)`
+(`frontend/mls-core/src/state.rs`), reached through two named entry points; the TypeScript side has
+one caller for both, `mintKeyPackages()` in `frontend/src/lib/mls-client/keyPackages.ts`.
+
+| | Static fallback | One-time prekey (OTKP) |
+|---|---|---|
+| Server row | `key_package`, one per device, replaced on each connection | `one_time_key_package`, a pool, FIFO |
+| Served when | the pool is empty - to **every** caller, unchanged | there is one left; the row is deleted with the claim |
+| MLS marking | `last_resort` extension, `LastResort` in the leaf capabilities | none |
+| After a join | private bundle **kept** | private bundle deleted by `into_group` |
+
+**Why the fallback must be `last_resort`, and what it cost to find out.**
+`resolveKeyPackagePayloadForDevice` returns `otkp?.keyPackage ?? device.keyPackage`, so an empty
+pool means the same bytes go to every peer until the device next connects. That is deliberate -
+without it, a device whose pool ran dry could never be added to a group again. But OpenMLS deletes
+an ordinary KeyPackage's private bundle the moment a Welcome built on it is processed
+(`openmls-0.8.1/src/group/mls_group/creation.rs:605`), so an unmarked fallback was good for exactly
+one join. Measured on the Mi 9T on 2026-09-06: a device re-entering ten groups at once got ten
+Welcomes built on the one fallback the server had, joined the first, and answered the other nine
+with `NoMatchingKeyPackage [n_secrets=3..5]` - nineteen times. It then sent another
+`welcome_request`, the responder kicked and re-added it on the same dead package, and nothing broke
+the loop until the next reconnection replaced the row. From the notification shade the same event
+reads `Nouveau message de <name>` with nothing under it: the group could not be joined, so the
+message could not be decrypted.
+
+`frontend/mls-core/tests/last_resort_key_package.rs` pins both halves - the fallback must survive
+being served twice, the pool prekey must not - and
+`apps/chat-delivery-service/src/controllers/devices.controller.static-fallback.spec.ts` pins the
+server's side of the promise, so the pair cannot drift apart silently.
+
 ### Static fallback key package
 
-- Generated on every `generateKeyPackage()` call.
+- Generated on every `generateKeyPackage()` call, and published before the pool.
 - Stored server-side as the device's main KP.
-- Used when all OTKPs are exhausted.
+- Used when all OTKPs are exhausted - which the server now says out loud (`[KP] one-time pool
+  EMPTY`), because a client that has stopped replenishing is invisible from anywhere else.
 
 ### One-time key packages (OTKP / prekeys)
 
@@ -676,7 +710,7 @@ field renamed on one side alone fails the suite as well as `svelte-check`.
 
 | Bug ID | Description | Fix |
 |---|---|---|
-| S2 | Static fallback rotation | Rotation inside `replenishKeyPackages` |
+| S2 | Static fallback rotation | Rotated on every connection by `syncConnectionAfterWsOpen` |
 | S5 | Stale `lastKnownState` passed to worker | Fresh state passed at each generation |
 | C1 | Ambiguous null `ProcessResult` | Typed `ProcessResult` |
 | C2 | False positive null counting | Removed |

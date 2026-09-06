@@ -70,6 +70,14 @@ export class DevicesController {
   /**
    * Pops one OTKP (FIFO) for a device, or returns the static registration KeyPackage.
    * Returns null when the device is revoked or has no registered KeyPackage.
+   *
+   * THE STATIC ROW IS SERVED TO EVERY CALLER, UNCHANGED, UNTIL THE DEVICE RECONNECTS - which is
+   * why the client mints it with the MLS `last_resort` extension (`mintKeyPackages`). An ordinary
+   * KeyPackage loses its private bundle at the first Welcome built on it, so before 2026-09-06 the
+   * second peer served this row built a Welcome the device could never process: ten groups
+   * re-added at once on a Mi 9T produced one join and nineteen `NoMatchingKeyPackage` refusals,
+   * and the device re-asked for a Welcome for ever. See
+   * `frontend/mls-core/tests/last_resort_key_package.rs`.
    */
   private async resolveKeyPackagePayloadForDevice(
     userId: string,
@@ -107,6 +115,15 @@ export class DevicesController {
       return null;
     });
 
+    // AN EMPTY POOL IS A FACT SOMEBODY SHOULD KNOW, not just a branch. It means this device is
+    // being added faster than it reconnects to replenish, or that its client stopped replenishing
+    // at all - and the second is invisible from here in any other way. The fallback is correct
+    // (it is reusable by construction), so this accuses the pool, not the join.
+    if (!otkp) {
+      this.logger.warn(
+        `[KP] one-time pool EMPTY for ${userId}/${deviceId} - serving the static last-resort row`
+      );
+    }
     return otkp?.keyPackage ?? device.keyPackage;
   }
 

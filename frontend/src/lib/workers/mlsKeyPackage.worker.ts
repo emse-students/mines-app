@@ -1,3 +1,4 @@
+import { mintKeyPackages } from '$lib/mls-client/keyPackages';
 import { loadAndInitWasm } from '$lib/mls-client/mlsWasmLoader';
 import type {
   MlsKeyPackageErr,
@@ -44,13 +45,9 @@ workerScope.onmessage = async (event: MessageEvent<MlsKeyPackageRequest>) => {
       stateWasExpected
     );
 
-    const fallback = client.generate_key_package() as Uint8Array;
-    const poolPackages: ArrayBuffer[] =
-      needed > 0
-        ? [...(client.generate_key_packages(needed) as unknown as Iterable<Uint8Array>)].map(
-            (bytes) => asTransferBuffer(bytes)
-          )
-        : [];
+    const minted = mintKeyPackages(client, needed);
+    const fallback = minted.fallback;
+    const poolPackages: ArrayBuffer[] = minted.poolPackages.map((bytes) => asTransferBuffer(bytes));
     const nextState = client.save_state(deviceKeyB64) as Uint8Array;
 
     const response: MlsKeyPackageOk = {

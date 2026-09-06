@@ -1,5 +1,6 @@
 /**
- * NOTIF-4 / NOTIF-4b / NOTIF-9 / NOTIF-10 / NOTIF-11 - the notification surface, one check per run.
+ * NOTIF-1b / NOTIF-4 / NOTIF-4b / NOTIF-9 / NOTIF-10 / NOTIF-11 - the notification surface, one
+ * check per run.
  *
  * These five are ones the LIFE phase did NOT already answer. NOTIF-1 and NOTIF-8 were measured by
  * LIFE-8 (`am kill`, decrypted text in 4.7 s) and LIFE-4 (doze, decrypted text in 4.6 s), so
@@ -9,7 +10,7 @@
  * not available to us: a force-stopped package sits in Android's STOPPED state and the framework
  * cancels every FCM broadcast to it. So the kill is always `am kill` from HOME, asserted.
  *
- * Usage: bun notif.mjs 4|4b|9|10|11
+ * Usage: bun notif.mjs 1b|4|4b|9|10|11
  */
 import { APP_TAB, awaitMessage, client, COMPOSER, countMessage, ensureChat, evaluate, openConversation, send } from '../chat.mjs';
 import { gate, logcatReport, logcatSince, report, watch } from '../watch.mjs';
@@ -99,7 +100,69 @@ const oW2 = await watch(w2, `notif${which}-w2`);
 const oW1 = await watch(w1, `notif${which}-w1`);
 const out = { check: `NOTIF-${which}` };
 
-if (which === '4') {
+/**
+ * NOTIF-1b - THE CASE THE P1 WAS ABOUT, AND THE ONE THIS BOARD NEVER HAD A ROW FOR.
+ *
+ * Twenty-three NOTIF rows, and none of them asks what happens when the app is merely BACKGROUNDED
+ * and alive. NOTIF-1 kills it, NOTIF-7 taps a banner that is assumed to exist, LIFE-8 kills it too.
+ * The phone in a pocket - the commonest state a phone is ever in - was the one nobody asserted, and
+ * it is exactly where the defect lived: a backgrounded Android keeps its WebSocket, receives the
+ * frame and ACKs it, so the server correctly sends NO push, and the JS layer opened with
+ * `if (isMobileTauriRuntime()) return;` on the premise that the push handler would speak. It never
+ * ran. Nobody notified at all, while the app held the message the whole time.
+ *
+ * THE PREMISE IS ASSERTED, NOT ARRANGED. `pid` non-empty and `foregrounded()` false AT THE SEND is
+ * what separates this row from NOTIF-1; a process that died between HOME and the send would make
+ * the deferred push fire and this row pass while measuring the killed path.
+ *
+ * AND THE ANTI-FAKE CLAUSE IS A CLOCK, WHICH IS UNUSUAL HERE AND IS THE POINT. `scheduleDeferredPush`
+ * fires only for a message still unACKed after TEN SECONDS. So a notification that arrives INSIDE
+ * that window cannot have come from a push - it can only have come from the JS layer, which is the
+ * thing being measured. Without it, a phone whose ACK merely failed would notify through the push
+ * handler and this row would go green over a fix that does nothing. The number is not a timeout to
+ * be tuned: it is the server's own constant, and the row reads it as a discriminator rather than as
+ * a budget.
+ */
+if (which === '1b') {
+  const alive = () => ({ pid: phone.pid(), foregrounded: phone.foregrounded() });
+  stage('backgrounding the phone with HOME - the app must stay ALIVE');
+  phone.home();
+  await sleep(3_000);
+  out.atBackground = { ...alive(), procState: phone.procState() };
+
+  const m = mark('NOTIF1B');
+  out.marker = m;
+  out.atSend = alive();
+  stage(`sending ${m} (pid=${out.atSend.pid || 'DEAD'}, foregrounded=${out.atSend.foregrounded})`);
+  await send(w2, `${m} backgrounded and alive`);
+
+  stage('waiting for a notification - inside the 10 s the deferred push cannot beat');
+  out.notifiedInMs = await phone.awaitNotification(m, 60_000);
+  // COUNTS AND PATTERNS, NEVER THE LINES. `phone.notifications()` says so in its own docblock:
+  // titles and bodies are real conversation content, and this ledger is read from a transcript. The
+  // marker is synthetic, so matching ON it is safe; carrying what it matched is not.
+  out.shadeHits = shadeHits(m);
+  out.undecrypted = undecryptedInShade();
+
+  // THE PREVIEW IS HALF THE ROW. The reported symptom was a banner reading `Nouveau message de
+  // <name>` with nothing under it - a notification that arrived and said nothing - so a clause that
+  // only counted banners would have gone green on the defect exactly as the user reported it.
+  const carriesTheText = out.shadeHits > 0;
+
+  // The app had it all along, which is what made the silence a defect rather than a loss.
+  out.heldOnA1 = await withDeadline(countMessage(a1Setup, m), 45_000, 'A1 countMessage').catch(() => null);
+
+  const unmet = [];
+  if (!out.atSend.pid) unmet.push('theAppWasStillAlive');
+  if (out.atSend.foregrounded) unmet.push('theAppWasHidden');
+  if (out.notifiedInMs === null) unmet.push('aNotificationArrived');
+  if (!carriesTheText) unmet.push('itCarriedTheMessageAndNotJustASenderName');
+  if (out.notifiedInMs !== null && out.notifiedInMs >= 10_000) unmet.push('itBeatTheDeferredPushWindow');
+  if (!out.heldOnA1) unmet.push('theAppActuallyHeldTheMessage');
+  out.unmet = unmet;
+  out.verdict = unmet.length === 0 ? 'PASS' : 'FAIL';
+  stage(`NOTIF-1b -> ${out.verdict} (notified in ${out.notifiedInMs}ms, unmet ${JSON.stringify(unmet)})`);
+} else if (which === '4') {
   // Cross-device dismissal: the phone notifies, the OTHER device of the same user reads, the
   // phone's notification must go. The two halves are asserted separately - a check that only
   // watched the shade empty out would pass on a phone that never notified at all.

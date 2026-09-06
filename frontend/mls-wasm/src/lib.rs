@@ -243,6 +243,17 @@ impl WasmMlsClient {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// The device's STATIC fallback. Reusable: the delivery service serves this one package to
+    /// every peer that finds the one-time pool empty, and an ordinary KeyPackage would be consumed
+    /// by the first Welcome built on it.
+    #[wasm_bindgen]
+    pub fn generate_last_resort_key_package(&self) -> Result<Vec<u8>, JsValue> {
+        log::info!("generate_last_resort_key_package");
+        self.manager
+            .generate_last_resort_key_package()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     #[wasm_bindgen]
     pub fn generate_key_packages(&self, count: usize) -> Result<js_sys::Array, JsValue> {
         log::info!("generate_key_packages count={}", count);

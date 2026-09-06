@@ -2678,6 +2678,22 @@ client", never "clean on the server".
 
 ### P1 - a device asks for a Welcome for ever, and the member that answers RESETS the row that would have let it heal itself (measured on prod 2026-09-01)
 
+> **THE "FOR EVER" HAS A MECHANISM NOW, FOUND ON 2026-09-06, AND IT IS FIXED.** The loop above
+> describes a device asking and a responder answering; what nobody had asked was why the ANSWER did
+> not land. The delivery service serves a device's static `key_package` row to every caller once its
+> one-time pool is empty - the same bytes, until that device next connects - and MLS deletes an
+> ordinary KeyPackage's private bundle at the first Welcome built on it. So a device re-entering
+> several groups at once could join exactly ONE: the Mi 9T at 18:01:27 got ten Welcomes on one
+> fallback, joined the first and answered nine with `NoMatchingKeyPackage [n_secrets=3..5]`,
+> nineteen times over. It then re-asked, the responder kicked and re-added it on the same dead
+> package, and the loop had no exit. The fallback is now minted with the MLS `last_resort` extension
+> (`mls-core/tests/last_resort_key_package.rs`, `CHANGELOG.md`,
+> [mls-protocol](protocols/mls-protocol.md#the-two-kinds-of-key-package)). **This does not close the
+> entry**: the reset-the-healing-row half and the prod measurement below are untouched, and the
+> `[KICK] Stale leaf` sighting is still a device asking for something it should not need. It does
+> mean the local reproduction the entry asks for was standing on a second defect the whole time, so
+> anything measured before 2026-09-06 was measuring both.
+
 **SEEN AGAIN ON THE LOCAL ESTATE, 2026-09-06 01:03** - the first sighting outside production, and it
 is the only line of dirt on an otherwise clean HEAL-REVOKE-5: `[KICK] Stale leaf <the phone> removed
 from ba048e26…` on W1. That is the documented answer - a `welcome_request` for a group whose leaf is

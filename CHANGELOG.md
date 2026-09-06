@@ -13,6 +13,28 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **A device re-entering several groups at once could join exactly ONE of them, and re-asked for
+  the rest for ever.** The delivery service pops a one-time prekey when a device has one and
+  otherwise serves that device's static `key_package` row - the same bytes, to every caller, until
+  the device next connects. That fallback is not optional: without it a device whose pool ran dry
+  could never be added to a group again. But MLS deletes an ordinary KeyPackage's private bundle the
+  moment a Welcome built on it is processed, so the row was good for one join and dead for every
+  other peer it had already been handed to. Measured on the Mi 9T on 2026-09-06: ten groups
+  re-added in one burst produced one join and nineteen `NoMatchingKeyPackage [n_secrets=3..5]`
+  refusals; the device sent another `welcome_request`, the responder kicked and re-added it on the
+  same dead package, and nothing broke the loop until the next reconnection republished a fallback.
+  The user's report of a notification reading `Nouveau message de <name>` with nothing under it is
+  the same event seen from the shade - the group could not be joined, so the message could not be
+  decrypted. RFC 9420's extensions draft has one answer for exactly this server-side pattern and
+  OpenMLS implements it: a `last_resort` KeyPackage keeps its private bundle after a join. The two
+  kinds now differ in the crypto rather than by convention - one `build_key_package(last_resort)` in
+  `mls-core` with two named entry points, and one `mintKeyPackages()` in place of the four call
+  sites that each minted a fallback by hand (the worker, its two recovery branches, the main-thread
+  path). Two dead Tauri commands that minted a third and fourth kind went with them, as did
+  `replenishKeyPackages`, a one-line wrapper whose only caller was its own test. An empty pool is
+  now announced by the server: it is the only place that can see a client which has stopped
+  replenishing.
+
 - **The one line saying a device's history had been repaired could not say WHICH conversation.**
   `[HISTORY_BUNDLE] N messages received from the inviting peer` was wrong twice on a device
   rejoining forty groups at once: the sender is whichever member the server's random election
