@@ -6148,3 +6148,13 @@ exist on both estates, its credentials have to be GitHub secrets, and somebody h
 CI job holds a real login for a real user on production. **The alternative - that nobody signs in
 before users do - is what happened on 2026-09-06**, and it cost every user their access for the time
 it took one of them to report it.
+
+**7. AN INCIDENT WAITS BEHIND STORE ARTEFACTS IT DOES NOT NEED.** P3, measured on 2026-09-06.
+`release.yml` carries `concurrency: group: release, cancel-in-progress: false`, which is right - two
+releases running at once would race the bump and the markers. But `v0.16.5-alpha.2`, whose only job
+was to move `dev-deployed` one commit so the hotfix could ship, sat `pending` while
+`v0.16.5-alpha.1` finished building an APK and an IPA that nobody was waiting for. **The restoration
+of service was queued behind a TestFlight upload.** Whatever the fix is - a lane for a release whose
+estate work is done, cancelling a superseded pre-release's store arms, or simply knowing to cancel by
+hand - the thing to keep is that the serialisation is correct and only its GRANULARITY is wrong: the
+estate and the stores do not need the same lock.
