@@ -1223,7 +1223,7 @@ audio and video, with TURN as production configures it - prod HAS it configured
 the manifest permission, `kCanariCallsEnabled` and Kotlin's `CALLS_ENABLED` all move together, and
 `CallService.callsEnabled.test.ts` is the test that already asserts the on state.
 
-### P3 - the SFU's TURN acquisition fails in silence, twice (2026-09-01)
+### ~~P3 - the SFU's TURN acquisition fails in silence, twice (2026-09-01)~~ - FIXED 2026-09-06, and it was THREE times
 
 `fetch_cloudflare_ice_servers` ends both its network call and its JSON decode with `.ok()?`
 (`apps/call-service/src/main.rs`), so a Cloudflare outage, an expired API token and a response shape
@@ -1238,6 +1238,21 @@ and it took reading the call site to know that meant "no call" rather than "acqu
 That ambiguity is the defect. Note also that `docs/wiki/services/call-service.md` claimed the fetch
 happens **on startup**; it happens per peer connection (`resolve_ice_servers()` at the API builder),
 and the page has been corrected.
+
+**FIXED 2026-09-06, and the third silence was in the same function.** Both `.ok()?` now log and say
+what they fell back to - `Cloudflare TURN API unreachable` for the transport failure, and a distinct
+line for a 2xx whose body this service cannot read, which is the response-shape change that would
+otherwise be indistinguishable from an outage. The third: `CLOUDFLARE_TURN_TTL_SECONDS` was read as
+`.ok().and_then(|s| s.parse().ok()).unwrap_or(3600)`, so `7200s` - a plausible thing for a human to
+write - silently became 3600, and the only way to find out was to time a credential expiring. It
+warns and names the offending value now.
+
+**The two env-var reads above them stay silent DELIBERATELY**: an absent `CLOUDFLARE_CALLS_API_TOKEN`
+is a configuration statement, not a failure, and a line on every start of a dev estate is the noise
+this entry exists to remove. The difference is now visible - if TURN is configured and broken, three
+lines say so.
+
+`cargo clippy --all-features --all-targets` clean.
 
 ### P2 - what made the profile fetches fail on that device at that moment
 
@@ -2136,8 +2151,30 @@ no secrets for, and **that reading asserts a decrypt that never happened**: the 
   the asker can receive it. Those four were about the WAITER not being there; this one is about the
   device being ADDRESSABLE before it was ready to be addressed.
 
-**OWED**: a re-run of HEAL-REVOKE-4, HEAL-REVOKE-5 and HEAL-repair on a build carrying the fix. Until
-then this is FIXED, NOT SHIPPED.
+**MEASURED, AND THE ROW IS `PASS`.** On `cafb24177`, 2026-09-06 09:52: **the returned device sees
+3 of 3 in 0 ms** and the reference 3 of 3 in 1 ms, `equalityGap: []`, 40 rows / 40 ready,
+`stillAmber: []`, **clean on all three observers**, `unmet: []`. All three trigger clauses hold, so
+the row is not vacuous.
+
+**IT TOOK TWO FIXES AND THE SECOND WAS THE INSTRUMENT'S OWN BLINDNESS.** The ordering above put the
+subject green on the very first re-run (09:42) - 3 of 3 in 0 ms where the previous run read `0 of 3
+for ever` - and the verdict was still `FAIL`, on one clause: `theAskerAPPLIEDTheAnswer`. That clause
+was **unsatisfiable by construction, on every run this row has ever had**. The runner filters each
+client's join/history trail by the group's own id prefix, deliberately (*a trail of forty lines
+about fifteen groups answers nothing about the one that failed*), and
+`[HISTORY_BUNDLE] N messages received from the inviting peer` named no group at all. **That is a
+product log defect and not a rig one**: on a device rejoining forty groups it is the ONE line saying
+a conversation's history was repaired, its sibling four statements above already named both the
+group and the sender, and `from the inviting peer` was wrong too - the sender is whichever member
+the server's RANDOM election picked. Fixed at the line.
+
+**AND THE EPOCH QUESTION IS ANSWERED FOR THIS ROW: NOT OBSERVED.** The frame now reaches a decrypt,
+and the exchange completes in 0 ms - so the asymmetry between a `control` request and an epoch-bound
+answer, real as it is on paper, did not cost this row anything on any of the three runs. It stays
+worth knowing and is no longer evidence for anything.
+
+**OWED**: HEAL-REVOKE-5, -8, -2, -3 and -9 on a build carrying both fixes - all `PASS-DIRTY` on the
+`arrived twice` line alone, which is fixed. Until a release carries them this is FIXED, NOT SHIPPED.
 
 ### P3 - HEAL-W2's break cannot take, because the live client writes its MLS state back over the restore (measured 2026-09-06)
 

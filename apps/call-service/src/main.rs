@@ -1492,10 +1492,16 @@ async fn fetch_cloudflare_ice_servers() -> Option<Vec<RTCIceServer>> {
         .ok()
         .filter(|s| !s.trim().is_empty())?;
 
-    let ttl: u64 = std::env::var("CLOUDFLARE_TURN_TTL_SECONDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3600);
+    // A MALFORMED TTL IS NOT AN ABSENT ONE. `and_then(parse().ok())` turned `CLOUDFLARE_TURN_TTL=
+    // 7200s` into the default and said nothing, so a deployment that thought it had asked for two
+    // hours got one, and the only way to find out was to time a credential expiring.
+    let ttl: u64 = match std::env::var("CLOUDFLARE_TURN_TTL_SECONDS") {
+        Ok(raw) => raw.parse().unwrap_or_else(|e| {
+            warn!("[ICE] CLOUDFLARE_TURN_TTL_SECONDS={raw:?} is not a number ({e}) - using 3600");
+            3600
+        }),
+        Err(_) => 3600,
+    };
 
     let url = format!(
         "https://rtc.live.cloudflare.com/v1/turn/keys/{}/credentials/generate-ice-servers",
@@ -1503,14 +1509,25 @@ async fn fetch_cloudflare_ice_servers() -> Option<Vec<RTCIceServer>> {
     );
 
     let client = reqwest::Client::new();
-    let response = client
+    // ACCUSES RATHER THAN RETURNING `None`. Both of the `.ok()?` in this function used to make an
+    // outage, an expired token and a changed response shape indistinguishable from "TURN is not
+    // configured here" - the same `None`, no line, and a silent slide into `ice_servers_from_env`.
+    // A relay path that quietly is not there is the one failure this service cannot afford to
+    // discover from a user saying a call did not connect.
+    let response = match client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_token))
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({ "ttl": ttl }))
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("[ICE] Cloudflare TURN API unreachable ({e}) - falling back to the env servers");
+            return None;
+        }
+    };
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1523,7 +1540,15 @@ async fn fetch_cloudflare_ice_servers() -> Option<Vec<RTCIceServer>> {
         return None;
     }
 
-    let data: CloudflareIceResponse = response.json().await.ok()?;
+    let data: CloudflareIceResponse = match response.json().await {
+        Ok(d) => d,
+        Err(e) => {
+            error!(
+                "[ICE] Cloudflare TURN API answered 2xx with a body this service cannot read ({e})                  - falling back to the env servers"
+            );
+            return None;
+        }
+    };
     let servers: Vec<RTCIceServer> = data
         .ice_servers
         .into_iter()
