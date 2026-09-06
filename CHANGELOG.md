@@ -11,6 +11,40 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Incident - 2026-09-06, every web login refused in v0.16.4
+
+**ADMIN BYPASS TAKEN, and this paragraph is the record the rule asks for.** `gh pr merge 399
+--squash --admin` merged the fix without waiting for `CI passed`, on the user's explicit instruction
+("Bypass admin. C'est urgent"), because production was refusing every browser login at the time. No
+gate of `release-preflight.sh` was bypassed: the ordinary alpha-then-stable sequence was followed,
+and the only thing skipped was the branch ruleset's required check on the pull request.
+
+**What broke.** `prune_expired_key_packages` (#392, shipped in v0.16.4) reads
+`std::time::SystemTime::now()` from `load_or_create`. `mls-core` also compiles to
+`wasm32-unknown-unknown`, where that call is not implemented and PANICS. Every browser login unwound
+in MLS init, and the login path classified the failure as `auth_pin_mismatch` - so every user was
+told their correct PIN was wrong, account-wide.
+
+**Three things this incident proved about the delivery chain, none of them the panic itself.**
+
+1. **PRODUCTION HAD NOT BEEN DEPLOYED SINCE v0.16.1.** `Production estate` needs `[android, ios]` in
+   success, deliberately and correctly - but v0.16.2 and v0.16.3 both had a store arm fail, so both
+   were published, announced and never served to anybody. **Nothing said so.** The backlog carries
+   "nothing tells anybody prod is down"; this is its sibling and it is quieter - nothing tells
+   anybody prod did not MOVE.
+
+2. **THERE IS NO ROLLBACK.** `docker-compose.prod.yml` names its images `:latest`, so what
+   production runs is decided entirely by what that tag points at when `docker pull` runs.
+   Re-running v0.16.1's deploy job worked perfectly - every step green, GHCR authenticated, health
+   check passed - and redeployed **v0.16.4**, because `latest` is v0.16.4. A version can be shipped
+   and cannot be unshipped.
+
+3. **A GREEN DEPLOY AND AN HTTP 200 BOTH HELD THROUGHOUT.** The release run was green, both estates
+   answered 200, and every user was locked out. The rule already in `CLAUDE.md` - a green deploy
+   proves the containers started, never that the site answers - needs one more clause: **answering
+   is not working either.** Nothing in the campaign opens a session on a freshly deployed web build,
+   which is the first thing any real user does.
+
 ### Fixed
 
 - **Every web login was refused with "PIN incorrect" in v0.16.4, and the PIN was right.** The prune
