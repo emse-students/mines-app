@@ -80,16 +80,60 @@ describe('a session loss releases every waiting caller, not only the first', () 
   });
 });
 
-describe('the PIN watchdog stays a net and never becomes the reporter', () => {
-  it('is cleared by both callbacks that can end a login', () => {
+/**
+ * THE PIN MODAL IS RELEASED BY A PROOF, NEVER BY A CLOCK - and it used to be by a clock.
+ *
+ * A ten-second watchdog called itself a safety net for "an unexpected early return or a hung
+ * network call" and, on expiry, set `auth_pin_timeout` - "unlocking is taking longer than expected,
+ * please try again" - which is a claim about a login it had no way to inspect. Measured on a Mi 9T
+ * on 2026-09-06, three cold starts out of three: it fired at 18:47:58 and the login succeeded at
+ * 18:48:10, having spent those twelve seconds inside one native call that decrypts a 19.9 MB
+ * `mls.bin` and logs nothing while it runs. So the clock could not tell "hung" from "working", and
+ * the retry it advised lands on `loginImpl`'s "a login already owns the flow" guard, which returns
+ * silently - the watchdog manufacturing the exact condition it exists to catch.
+ *
+ * What replaces it is the fact the clock was standing in for. `login()` always settles, so a caller
+ * can only be stranded if it settles WITHOUT having answered; that is observable, and it is now
+ * observed. These guards pin the three properties an edit could quietly lose: no timer decides the
+ * outcome, every terminal path marks the login answered, and the settled-with-no-answer branch
+ * exists and is guarded on `answered`.
+ */
+describe('the PIN modal is released by a proof, never by a clock', () => {
+  const submitBody = (() => {
     const start = source.indexOf('function handlePinSubmit(');
     expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, source.indexOf('\n  /**', start));
-    // The watchdog invents a cause (`auth_pin_timeout`) and advises a retry, so any terminal
-    // outcome that fails to clear it reports the wrong thing. These two clear it; the third -
-    // a definitive session loss - is released by `handleSessionExpired` above, which is why the
-    // order asserted there is what keeps this timer from ever being the message the user sees.
-    expect(body).toMatch(/onMlsReady: \(\) => \{[\s\S]*?clearTimeout\(watchdog\);/);
-    expect(body).toMatch(/onLoginFailed: \([\s\S]*?clearTimeout\(watchdog\);/);
+    const rest = source.slice(start + 1);
+    const end = rest.search(/\n {2}(?:async )?function /);
+    return rest.slice(0, end === -1 ? undefined : end);
+  })();
+
+  it('has no timer that can decide the outcome', () => {
+    // ASSERTED ON THE STATEMENT, NOT ON A NAME. One `setTimeout` remains and is allowed:
+    // `stepTimer` only changes the label under the spinner and says nothing about whether the login
+    // worked. The property that matters is that no timer can write the verdict, so that is what is
+    // read - a guard matching the word "watchdog" would be satisfied by a rename.
+    const timerBodies = [...submitBody.matchAll(/setTimeout\(\(\) => \{([\s\S]*?)\n {4}\}/g)].map(
+      (mm) => mm[1]
+    );
+    expect(timerBodies).toHaveLength(1);
+    for (const body of timerBodies) {
+      expect(body).not.toMatch(/pinError/);
+      expect(body).not.toMatch(/pinLoading = false/);
+    }
+  });
+
+  it('marks the login answered on every path that can end it', () => {
+    expect(submitBody).toMatch(/onMlsReady: \(\) => \{\s*answered = true;/);
+    expect(submitBody).toMatch(/onLoginFailed: \([\s\S]*?answered = true;/);
+    expect(submitBody).toMatch(/\.catch\(\(e: unknown\) => \{[\s\S]*?answered = true;/);
+  });
+
+  it('releases the modal when login() settles without answering, and only then', () => {
+    // The guard is what keeps a NORMAL success from clearing a modal it never opened, and what
+    // keeps this branch from firing after `onLoginFailed` has already written the real message.
+    expect(submitBody).toMatch(
+      /\.then\(\(\) => \{[\s\S]*?if \(answered \|\| !pinLoading\) return;/
+    );
+    expect(submitBody).toMatch(/\.then\(\(\) => \{[\s\S]*?auth_pin_no_result/);
   });
 });

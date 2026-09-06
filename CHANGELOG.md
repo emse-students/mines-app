@@ -13,6 +13,24 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ### Fixed
 
+- **The PIN gate told the user the unlock had failed, in red, on every cold start of a real phone -
+  while the unlock was working.** A ten-second watchdog in `handlePinSubmit` called itself a
+  "temporal safety net" for "an unexpected early return or a hung network call" and, on expiry, set
+  `auth_pin_timeout` - *"Le deverrouillage prend plus de temps que prevu. Veuillez reessayer."*
+  Measured on a Mi 9T on 2026-09-06, three cold starts out of three: it fired at 18:47:58 and the
+  login succeeded at 18:48:10. The twelve seconds in between are one native call that decrypts a
+  19.9 MB `mls.bin` and logs nothing at all while it runs, so the clock could not distinguish "hung"
+  from "working" - and the retry it advised lands on `loginImpl`'s "a login already owns the flow"
+  guard, which returns silently, so the watchdog manufactured the exact condition it existed to
+  catch. It also blocked the harness, whose `pin.mjs` reads that red text as a refusal.
+  **Replaced by the fact the clock was standing in for**: `login()` always settles, so the only way
+  a caller can be stranded is for it to settle without having answered - which is observable, and is
+  now observed. A slow login is no longer a failed one; a genuinely silent return is reported as
+  what it is. A promise that never settles is deliberately still not covered here: that is a missing
+  deadline on the request, and inventing a verdict in the UI would be the same mistake in a shorter
+  form. The size of `mls.bin` and the seventeen-second checkpoints behind it are filed with their
+  measurements in `docs/wiki/backlog.md`.
+
 - **Every mobile client accused the server of a defect once per heartbeat.** The gateway answers
   each 8-second ping with `{"type":"pong"}`, which belongs to no handler and never did.
   `WebMlsService` compared inline and returned; `TauriMlsService` had no such branch, so every one

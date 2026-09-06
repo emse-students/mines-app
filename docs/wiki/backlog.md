@@ -4599,14 +4599,14 @@ spinner, while the login underneath goes on to succeed. The user is told, in red
 failed; retrying starts a second one. Seen on screen twice today (`scratchpad/shot.png`), and it is
 the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unlock this phone.
 
-**Two questions, and they have different answers.**
+**Two questions, and they had different answers.**
 
-1. **The watchdog is a clock standing in for a proof, which the durable rules forbid.** Ask what it
-   means if it is wrong: it means a working login is reported as failed. So either every path out of
-   `globalSession.login()` calls back exactly once - in which case the watchdog is dead weight and
-   the fix is to delete it and prove the callback - or some path returns without calling back, and
-   THAT is the defect the watchdog has been hiding since it was written. The enumeration is owed
-   before either line is touched.
+1. ~~**The watchdog is a clock standing in for a proof.**~~ **ANSWERED AND FIXED, 2026-09-06.** The
+   enumeration came out the first way: `login()` always settles, and the only way a caller can be
+   stranded is for it to settle without having called back - which is observable rather than
+   guessable. The clock is gone and that fact is read instead; a slow login is no longer a failed
+   one. Story in `CHANGELOG.md`, guards in `sessionExpiredRelease.test.ts`, validated in negative
+   against two mutations. **The twelve seconds themselves are untouched, which is question 2.**
 2. **19.5 MB is the real question and it is not answered.** It has not been established what
    dominates the blob. One candidate has a mechanism already visible in the code:
    `generate_key_packages` writes every bundle to the provider's storage and NOTHING deletes them
@@ -4622,6 +4622,12 @@ the reason `pin.mjs` reports `REFUSED by the product` and the harness cannot unl
 **This is invisible to every gate in this repository.** The desktop clients carry a small state and
 the emulator never accumulates one; only a phone that has lived through a campaign shows it. It
 belongs with the other three iOS/Android defects that no green build could have caught.
+
+**WHAT REMAINS AFTER THE UI HALF WAS FIXED**: the 19.5 MB blob and the 17-second checkpoints. The
+user no longer sees a false failure, but the unlock still takes ~22 s on this handset and every
+structural checkpoint still costs 17 s of CPU. The measurement owed is the one named above - bytes
+per key package against `save_state`, then the per-group weight of a fresh device's blob - and it
+must come before any prune is written.
 
 ### P2 - the MLS snapshot version is a PER-DOCUMENT counter compared ACROSS documents, so a second tab's write is dropped on a collision (measured on TAB-4, 2026-09-05)
 

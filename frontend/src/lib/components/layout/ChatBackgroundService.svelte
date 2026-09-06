@@ -1384,29 +1384,41 @@
       if (pinLoading) pinStep = m.auth_pin_step_loading_mls();
     }, 800);
 
-    // Temporal safety net: if neither onMlsReady nor onLoginFailed fires within 10 s
-    // (e.g. an unexpected early return or a hung network call), unblock the spinner so
-    // the user can retry instead of staring at an infinite loader.
-    const watchdog = setTimeout(() => {
-      if (!pinLoading) return;
-      clearTimeout(stepTimer);
-      pinError = m.auth_pin_timeout();
-      pinLoading = false;
-      pinStep = '';
-      _loginInProgress = false;
-      appendLog('[PIN] Login watchdog fired after 10s - unblocking PIN modal.');
-    }, 10_000);
+    /**
+     * Whether the login ANSWERED - `onMlsReady` or `onLoginFailed`, whichever came first.
+     *
+     * THIS REPLACED A TEN-SECOND CLOCK, AND THE CLOCK WAS WRONG ON EVERY COLD START OF A REAL
+     * PHONE. It called itself a "temporal safety net" for "an unexpected early return or a hung
+     * network call" and, on expiry, told the user in red that the unlock had failed and to try
+     * again. Measured on a Mi 9T on 2026-09-06, three times out of three: the watchdog fired at
+     * 18:47:58 and the login succeeded at 18:48:10 - twelve seconds later, having spent them inside
+     * one native call that decrypts a 19.9 MB `mls.bin` and emits nothing at all while it does. So
+     * the clock could not distinguish "hung" from "working", and its guess manufactured the retry
+     * that then hits `loginImpl`'s "a login already owns the flow" guard, which returns silently.
+     *
+     * The case it was written for is real and stays covered - but by a PROOF rather than a guess.
+     * `login()` always settles; the only way a caller can be left waiting is for it to settle
+     * without having answered, which is exactly what an early return looks like from here. That is
+     * observable, so it is observed. A slow login is no longer a failed one, and a genuinely silent
+     * return is reported as what it is instead of being timed.
+     *
+     * What this deliberately does NOT cover is a promise that never settles - a hung fetch. That is
+     * a missing deadline on the REQUEST, where the fact lives; inventing a verdict here would be
+     * the same mistake in a shorter form. Root cause of the twelve seconds:
+     * `docs/wiki/backlog.md`, the 19.5 MB entry.
+     */
+    let answered = false;
 
     void globalSession
       .login(
         sessionCb({
           onMlsReady: () => {
+            answered = true;
             clearTimeout(stepTimer);
-            clearTimeout(watchdog);
           },
           onLoginFailed: (msg: string, code?: LoginErrorCode) => {
+            answered = true;
             clearTimeout(stepTimer);
-            clearTimeout(watchdog);
             pinError = msg;
             pinLoading = false;
             pinStep = '';
@@ -1414,11 +1426,23 @@
           },
         })
       )
+      .then(() => {
+        // Settled with no answer: something returned early without resolving this caller's UI.
+        // Nothing else can release the modal, and the message says what happened rather than
+        // guessing why.
+        if (answered || !pinLoading) return;
+        clearTimeout(stepTimer);
+        pinError = m.auth_pin_no_result();
+        pinLoading = false;
+        pinStep = '';
+        _loginInProgress = false;
+        appendLog('[PIN] login() returned without calling back - unblocking the PIN modal.');
+      })
       .catch((e: unknown) => {
         // login() routes errors through onLoginFailed; this guards against a rejection
         // that escapes that path (e.g. before the internal try) leaving the spinner stuck.
+        answered = true;
         clearTimeout(stepTimer);
-        clearTimeout(watchdog);
         const msg = e instanceof Error ? e.message : String(e);
         pinError = msg;
         pinLoading = false;
