@@ -42,6 +42,52 @@ import { readFileSync, existsSync } from 'node:fs';
 const API = 'https://api.appstoreconnect.apple.com';
 const PLATFORM = 'IOS';
 
+/**
+ * THE SUBMISSION DID NOT HAPPEN, AND THAT IS NOT A FAILURE. Apple gives an app ONE non-terminal
+ * version slot. A release published while the previous one is still WAITING_FOR_REVIEW, IN_REVIEW
+ * or PENDING_DEVELOPER_RELEASE finds that slot held, and cancelling a review is a human decision a
+ * release script must never take - so it stops, and stopping is the CORRECT outcome.
+ *
+ * WHY THIS IS A TYPE AND NOT A MESSAGE. `chooseVersionSlot` has always separated `blocked` from
+ * `fail`; the caller collapsed both into `throw new Error(slot.why)`, so both left through exit 1
+ * and a workflow could only tell them apart by reading English prose - a distinction exactly one
+ * call site would ever make. Three iOS jobs went red that way (v0.16.2, v0.16.3, v0.16.4) for the
+ * one outcome that is GUARANTEED whenever we release faster than Apple reviews. A red run whose
+ * cause is "working as designed" is noise, and this noise hid a store arm genuinely failing for
+ * three days: production sat on v0.16.1 while two releases reported themselves shipped.
+ */
+export class SlotHeldError extends Error {
+  /** @param {string} why */
+  constructor(why) {
+    super(why);
+    this.name = 'SlotHeldError';
+  }
+}
+
+/**
+ * "Nothing was submitted, and nothing is wrong." 75 is sysexits' EX_TEMPFAIL - *the user is invited
+ * to retry* - which is exactly this case. Everything the caller must ACT on still leaves through 1.
+ */
+export const EXIT_SLOT_HELD = 75;
+
+/**
+ * How a failed run leaves: the code the shell sees, and the one line it prints.
+ *
+ * Pure, exported and tested, because the alternative is asserting an exit code by spawning a script
+ * that talks to Apple. The workflow step reads the CODE, never the text.
+ *
+ * @param {unknown} e
+ * @returns {{code: number, line: string}}
+ */
+export function exitFor(e) {
+  if (e instanceof SlotHeldError)
+    return { code: EXIT_SLOT_HELD, line: `::notice::App Store submission deferred - ${e.message}` };
+  return {
+    code: 1,
+    line: `::error::App Store submission failed - ${e instanceof Error ? e.message : String(e)}`,
+  };
+}
+
 /** Apple's own limit on the release-notes field. Longer text is refused by the API, not truncated. */
 // THE TIGHTEST OF THE THREE DESTINATIONS, WHICH IS PLAY'S - not Apple's 4000, even though this
 // file is the App Store tool. The notes went to one store when this constant was written; since
@@ -588,7 +634,10 @@ async function main() {
     log('done.');
     return;
   }
-  if (slot.action === 'fail' || slot.action === 'blocked') throw new Error(slot.why);
+  if (slot.action === 'fail') throw new Error(slot.why);
+  // NOT AN ERROR, AND NOT AN exit 1: the slot is held by a version that is with Apple, which is the
+  // expected outcome of releasing faster than Apple reviews. See `SlotHeldError`.
+  if (slot.action === 'blocked') throw new SlotHeldError(slot.why);
 
   let version = null;
 
@@ -727,9 +776,8 @@ async function main() {
 // Only when run, so the decisions above can be imported by the test without reaching Apple.
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('submit.mjs')) {
   main().catch((e) => {
-    process.stderr.write(
-      `::error::App Store submission failed - ${e instanceof Error ? e.message : String(e)}\n`
-    );
-    process.exit(1);
+    const { code, line } = exitFor(e);
+    process.stderr.write(`${line}\n`);
+    process.exit(code);
   });
 }

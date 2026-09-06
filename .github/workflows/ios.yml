@@ -619,7 +619,39 @@ jobs:
       # ONLY FOR A STABLE, and not as a policy choice: `versionString` is a marketing version and
       # Apple refuses `0.15.0-alpha.1` outright. A pre-release's destination IS TestFlight, which
       # the upload above has already reached - there is nothing further to do for one.
+      # AND A DEFERRED SUBMISSION IS NOT A FAILED ONE, WHICH IS THE WHOLE POINT OF THE EXIT CODE.
+      #
+      # Apple gives an app ONE non-terminal version slot. Release faster than Apple reviews - which
+      # a hotfix does by definition - and the previous version is still sitting in it. The script
+      # then refuses, correctly: cancelling a review is a human decision and no release script may
+      # take it. That refusal used to leave through `exit 1` like any other, so this job went red,
+      # and `production` in `release.yml` is a SUCCESS dependency on this workflow.
+      #
+      # SO A BUSY APPLE QUEUE SKIPPED THE PRODUCTION DEPLOY. It did, three times - v0.16.2, v0.16.3
+      # and v0.16.4 - and nobody read it, because a red iOS arm had become the normal look of a
+      # release. Production sat on v0.16.1 for three days while two releases reported themselves
+      # shipped, and the third was the WASM outage: the fix reached the web only because a human
+      # deployed it by hand.
+      #
+      # `production`'s dependency is right and stays. What was wrong is what it was reading. The
+      # script now separates the two outcomes AS TYPES (`SlotHeldError` vs everything else), and
+      # this step gives them different fates:
+      #
+      #   0   submitted, or already submitted        -> green, and the web may ship
+      #   75  the slot is held by another version    -> green, and the web may ship. The binary is
+      #                                                 in TestFlight; only Apple's queue is busy
+      #   *   anything else                          -> RED, and the web must not ship a version a
+      #                                                 store refused
+      #
+      # 75 IS NOT A MAGIC NUMBER HERE: it is `EXIT_SLOT_HELD` in `tools/app-store/submit.mjs`, and
+      # `submit.test.mjs` reads this file to assert the two agree. A number duplicated into a
+      # workflow is a number that drifts silently, so it is asserted instead of trusted.
+      #
+      # WHAT THIS IS NOT: a `continue-on-error`. That would swallow a genuine refusal too, which is
+      # the failure this whole comment exists to prevent. A deferral is green because it is CORRECT,
+      # not because failures here are tolerable.
       - name: Create the App Store version, attach the build, and submit for review
+        id: submit
         if: inputs.publish && inputs.prerelease == 'false' && steps.testflight.outputs.uploaded == 'true'
         env:
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -628,10 +660,34 @@ jobs:
           APP_BUNDLE_ID: fr.emse.canari
           MARKETING_VERSION: ${{ inputs.version }}
           BUILD_NUMBER: ${{ steps.outputs.outputs.build_number }}
-        # `node` and not `bun`: this runs on a macOS runner where node is preinstalled, the script
-        # uses nothing but `node:crypto`, `node:fs` and global `fetch`, and setting bun up again
-        # after the archive would be a step for no gain.
-        run: bun tools/app-store/submit.mjs
+        run: |
+          set +e
+          bun tools/app-store/submit.mjs
+          code=$?
+          set -e
+
+          if [ "$code" -eq 0 ]; then
+            echo "submitted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$code" -eq 75 ]; then
+            echo "submitted=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### App Store submission deferred"
+              echo
+              echo "\`${MARKETING_VERSION}\` (build \`${BUILD_NUMBER}\`) is uploaded and available in"
+              echo "TestFlight, but it was NOT submitted for review: Apple's single version slot is"
+              echo "still held by an earlier version. The message above names it and its state."
+              echo
+              echo "**Nothing here needs fixing.** When that version leaves the slot - it ships, or a"
+              echo "human withdraws it in App Store Connect - re-run this job and the submission goes"
+              echo "through. The scheduled store-divergence check will keep saying so until it does."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          exit "$code"
 
       # LAST, AND THAT ORDERING IS THE FIX FOR SOMETHING THAT COST A WHOLE PLATFORM. It used to sit
       # BEFORE the store steps, so on `v0.16.0` this action was refused a release update
