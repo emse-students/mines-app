@@ -2075,9 +2075,13 @@ WHAT THE GATEWAY SHOWS, which is what settles it. Tracing one group by target:
 00:05:44  kind=mls  -> ...mtnci3lc-7mhd   (W1)                    <- the device's digest, going OUT
 ```
 
-**W1's `history_digest_request` was never routed to the returned device.** W1 logs
-`Keys differ - asked <device> to describe` at 00:00:37 and the gateway routes nothing to it. The
-request is persisted for a pull instead of delivered - and nothing tells the device to pull.
+**EXACTLY ONE frame reaches the device for that group, and then nothing for five minutes.** W1 logs
+`Keys differ - asked <device> to describe` at 00:00:37, and at 00:00:37 the gateway routes three
+`kind=mls` frames to W1 and ONE to the device. Whether that one is the digest request is NOT
+established - and it is the whole question, because six seconds later the device logs
+`27a8f5bf holds 4 frame(s) it can never read`. Either the request never reached it, or it reached
+it inside a frame the device could not decrypt. **Both readings end in the same place**: the device
+is waiting for something it will not get, and no timer, retry or edge is scheduled to change that.
 
 **WHAT FINALLY MOVES IT IS THE HARNESS RELOADING THE PAGE.** `messagesIn` gives up after 300 s and
 reloads; the digest goes out 4 s later in one run and 14 s later in the other, and the four
@@ -2091,8 +2095,11 @@ commit and sends its state key in the SAME SECOND; W1 answers within millisecond
 device's subscription for that group is not yet visible to the router, so the fan-out misses it and
 the frame is queued. Every other repair leg has been made to survive this; this one has not.
 
-  WHAT WOULD CONFIRM IT: the gateway's own subscriber set for that group at 00:00:37, against the
-  moment the device's `DeviceGroupMembership` row appears. Both are local and already logged.
+  WHAT SEPARATES THE TWO READINGS, and it is one query on a local box: the queued-message row for
+  that device at 00:00:37 - present means it was persisted and never collected, absent means it was
+  fanned out live and landed unreadable. The gateway's subscriber set for the group at that instant
+  says which, and the epoch on the four unreadable frames against W1's sending epoch says the other.
+  Nothing new has to be instrumented; both are already written down.
 
 **WHY IT SURVIVED TWO FIXES THE SAME NIGHT.** The ack deadline and the exclusion-reason bug were both
 suspected, both fixed, and neither moved the number - which is what forced the reading onto the
