@@ -4776,6 +4776,86 @@ arithmetic to argue about.** The client agrees from its own side: `needed=50` at
 not 49, not 30 - which is only possible if the pool is EMPTY each time. Reading 1 was right, and the
 debris is what made it look like something else.
 
+**READ OFF THE PHONE, 2026-09-06 - THE QUESTION IS CLOSED AND THE FIRST ANSWER WAS RIGHT.** An APK
+carrying `state_composition` was built and the device said it itself, in one line at load:
+
+```
+state composition - 8006000B total; KeyPackage 2338x5523276B, MessageSecrets 5x1220171B, Tree 5x1208632B
+```
+
+| part | entries | bytes | share | each |
+| --- | --- | --- | --- | --- |
+| **KeyPackage** | **2 338** | **5 523 276** | **69%** | 2 362 |
+| MessageSecrets | 5 | 1 220 171 | 15% | 244 034 |
+| Tree | 5 | 1 208 632 | 15% | 241 726 |
+
+**Key packages dominate, which is what this entry said before two corrections talked it out of the
+position.** 2 338 accumulated bundles on a device whose server pool holds fifty. Both earlier
+readings were also true and neither was the whole: deleting 42 abandoned groups really did free
+12.8 MB (~300 kB a group, and the table shows where that lives), and epochs really are bounded. What
+none of them could do was ATTRIBUTE, which is why the instrument now exists.
+
+**THE PRUNE'S 84-DAY HORIZON IS FAR TOO GENEROUS, AND THIS IS THE NUMBER THAT PROVES IT.** Not one of
+the 2 338 has expired - the prune did not fire on this load - because the pile accumulated in WEEKS
+and openmls dates a key package 84 days ahead. A horizon that never arrives is a horizon that bounds
+nothing in practice. **The retention rule needs to be tighter than a default lifetime, or bounded by
+COUNT**, and the count is now readable rather than guessed.
+
+**AND THE OBVIOUS TIGHTENING IS UNSAFE, WHICH IS THE PART A LATER SESSION WOULD GET WRONG.** The
+natural rule - *keep the recently minted bundles, drop the old ones* - grades on the wrong axis. A
+prekey can sit UNCLAIMED on the server for weeks and be claimed a second before the prune runs: its
+bundle is then old by mint date and load-bearing by use. **Mint age does not measure the risk.** What
+does is time since the package stopped being published, and nothing records that today.
+
+Three candidate rules, and what each actually costs:
+
+| Rule | Safe? | Reclaims the 2 338? |
+| --- | --- | --- |
+| `not_after < now` (shipped) | yes | no - 84 days never arrives |
+| Drop what the server's DELETE says it removed | **yes, by construction** - a returned row was never claimed, so no Welcome can exist for it | no, only the 50 currently published |
+| Keep published + last-resort + the K most recently minted | only if K mints cannot happen inside a Welcome's delivery window | yes, ~4.9 MB at K=200 |
+
+The second is provably correct and needs the endpoint to return what it deleted rather than 204. The
+third is the only one that reclaims the historical pile, and its safety is an ARGUMENT rather than a
+construction: with the provenance guard (#393) holding the pool at 50, K=200 is four full refills -
+days - and a Welcome does not take days. **That argument must be re-measured against the mint rate
+before the rule ships, not assumed from this line.** The guard is what makes it defensible at all; on
+a build without it the loop mints 200 in hours and the rule would eat live bundles.
+
+**The pile is very likely no longer growing.** It is debris from the purge loop, which #393 refuses.
+So this is a one-off reclaim of ~4.9 MB on affected handsets, not a leak - which is why it is P2 here
+and not filed with the P1 above.
+
+**AND A REAL GROUP IS NOT THE GROUP THE SYNTHETIC TEST MEASURED.** ~490 kB apiece here, against
+5 330 bytes for a fresh group of one and a 17 kB plateau at 81 epochs. The weight is `Tree` (member
+leaves a campaign accumulated - 242 kB is roughly 120 of them) and `MessageSecrets` (per-sender
+ratchet history, which `SenderRatchetConfiguration::new(2000, 2000)` sizes deliberately). Neither is
+epochs. **Every synthetic figure in `state_weight.rs` is a FLOOR and must be read as one.**
+
+**WHAT THE FIELD SHOWED THE SAME NIGHT, AND IT CORRECTS THIS ENTRY'S ARITHMETIC A THIRD TIME.**
+After `cleanup.mjs` swept 42 abandoned groups, the phone's `mls.bin` fell from **20 812 360 to
+8 018 495 bytes** - 12.8 MB, 61% - and one checkpoint from 48 449 ms to **6 943 ms**. The prune
+shipped that day did NOT fire (no line in the capture), so the drop is the groups.
+
+That looked like it demoted key packages, so the mechanism was measured rather than divided:
+`what_an_epoch_costs_at_constant_membership` churns one device in and out of a group forty times and
+**the state PLATEAUS - 81 epochs, 17 364 bytes, growth stops after the second round.** Epochs are
+bounded, `MessageSecrets` and `ResumptionPsk` stay at ONE entry each, so accumulated epochs are not
+what makes a real group heavy. **That refutation is the useful part**; what remains heavy about a
+campaign group is not yet named.
+
+**AND THE LOOP DID NOT REPRODUCE ON THE BUILD CARRYING THE GUARD.** With the pool emptied by hand to
+force a mint, the phone published 50 and kept all 50 - `needed=50`, no purge, and the guard's own
+`REFUSED` line never fired, meaning `keyPackageHasPrivate` recognised every one of them. The failing
+condition therefore needs something this run did not have, and the difference worth suspecting is the
+checkpoint cost: 48 s when it failed, 6.9 s when it did not. **That is a hypothesis and it is written
+as one** - three readings have already been wrong here, two of them from dividing numbers instead of
+removing a variable.
+
+**THE INSTRUMENT THAT WOULD HAVE SETTLED ALL OF THIS DID NOT EXIST**, which is why it now does:
+`MlsManager::state_composition` logs what the state is made of once per load, so the next occurrence
+is read rather than inferred.
+
 **WHAT THIS MEANS IN PRODUCTION, AND IT IS WORSE THAN THE BLOB.** A device whose one-time pool is
 empty is served its STATIC FALLBACK to every peer that asks. That is exactly the condition
 [mls-protocol](protocols/mls-protocol.md#the-two-kinds-of-key-package) names as the reason the

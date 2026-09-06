@@ -11,6 +11,29 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Added
+
+- **A device can now say what its persisted state is MADE OF, in one line at load.** `mls.bin` has
+  been a P1 on size alone - a phone at 20 812 360 bytes, a checkpoint costing 48 s, a PIN unlock
+  22 s - and both investigations were slowed by the same gap: nothing could ask a running device
+  what its state consisted of. It had to be inferred from synthetic states and arithmetic, and on
+  2026-09-06 that inference produced two wrong mechanisms in one evening.
+
+  `MlsManager::state_composition` groups the storage map by label, heaviest first, and
+  `state_composition_summary` renders the three heaviest into one `load_or_create` log line - the
+  seam the web client, the native client and the background FCM path all pass through. The label
+  list moves out of the test and into the crate, so what a reader sees on a phone and what the
+  measurement prints come from one function.
+
+  It answered its question the day it was written. The Mi 9T:
+  `8006000B total; KeyPackage 2338x5523276B, MessageSecrets 5x1220171B, Tree 5x1208632B` - **2 338
+  accumulated key package bundles, 69% of the state**, on a device whose server pool holds fifty.
+  None had expired, because the pile accumulates in weeks and openmls dates a key package 84 days
+  ahead, so the prune shipped the same day bounds a ceiling its horizon does not reach at this mint
+  rate. A real group came to ~490 kB, carried in `Tree` (accumulated member leaves) and
+  `MessageSecrets` (per-sender ratchet history) - not in epochs, which a companion measurement shows
+  plateau at 17 kB after 81 of them.
+
 ## [0.16.4] - 2026-09-06
 
 ### Fixed

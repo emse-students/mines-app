@@ -127,7 +127,115 @@ pub struct MlsManager {
     pub(crate) state_snapshot: RefCell<StateSnapshotCache>,
 }
 
+/// Every label `openmls_memory_storage` prefixes its storage keys with.
+///
+/// A key is `label || serde_json(id) || u16 version`, built by that crate's `build_key_from_vec`,
+/// so the label is a plain byte PREFIX and a scan can attribute every entry to exactly one owner.
+/// Longest match wins when one label is a prefix of another - `Tree` must not swallow
+/// `ApplicationExportTree`, and `Psk` must not swallow `ResumptionPsk`.
+pub(crate) const STORAGE_LABELS: &[&str] = &[
+    "KeyPackage",
+    "EncryptionKeyPair",
+    "SignatureKeyPair",
+    "EpochKeyPairs",
+    "Psk",
+    "Tree",
+    "GroupContext",
+    "ApplicationExportTree",
+    "InterimTranscriptHash",
+    "ConfirmationTag",
+    "MlsGroupJoinConfig",
+    "OwnLeafNodes",
+    "GroupState",
+    "QueuedProposal",
+    "ProposalQueueRefs",
+    "OwnLeafNodeIndex",
+    "EpochSecrets",
+    "ResumptionPsk",
+    "MessageSecrets",
+];
+
+/// One storage label's share of the state: how many entries, and how many bytes they occupy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoragePortion {
+    pub label: String,
+    pub entries: usize,
+    pub bytes: usize,
+}
+
 impl MlsManager {
+    /// What this device's persisted state is MADE OF, heaviest first.
+    ///
+    /// ## Why this exists, and why it is product code rather than a test helper
+    ///
+    /// `mls.bin` has been a P1 twice - a phone reached 20 812 360 bytes with a checkpoint costing
+    /// 48 s and a PIN unlock 22 s - and BOTH investigations were slowed by the same gap: nothing
+    /// could ask a device what its state was made of. The composition had to be inferred from
+    /// synthetic states and arithmetic, and on 2026-09-06 that inference was wrong twice in one
+    /// evening. A 12.8 MB drop was then attributed to abandoned groups on the strength of a
+    /// division, while a bounded per-epoch cost measured minutes later refuted the mechanism that
+    /// division implied.
+    ///
+    /// A number nobody can read off the running system is a number that gets guessed. This makes it
+    /// readable: it is the same scan `prune_expired_key_packages` uses, over the same map, exposed
+    /// rather than reimplemented - `tests/state_weight.rs` calls THIS instead of carrying its own
+    /// copy of the label list, so the measurement and the product can never disagree.
+    ///
+    /// Bytes are `key.len() + value.len()`, which is the entry's weight in the map rather than in
+    /// the CBOR that wraps it - close enough to attribute a megabyte, and it needs no serialisation.
+    pub fn state_composition(&self) -> Result<Vec<StoragePortion>, MlsError> {
+        let storage = self.provider.storage();
+        let values = storage
+            .values
+            .read()
+            .map_err(|e| MlsError::OpenMls(format!("Storage lock poisoned: {e}")))?;
+
+        let mut by_label: HashMap<String, StoragePortion> = HashMap::new();
+        for (k, v) in values.iter() {
+            let label = STORAGE_LABELS
+                .iter()
+                .filter(|l| k.starts_with(l.as_bytes()))
+                .max_by_key(|l| l.len())
+                .map(|l| (*l).to_string())
+                .unwrap_or_else(|| "UNKNOWN".to_string());
+            let e = by_label.entry(label.clone()).or_insert(StoragePortion {
+                label,
+                entries: 0,
+                bytes: 0,
+            });
+            e.entries += 1;
+            e.bytes += k.len() + v.len();
+        }
+
+        let mut rows: Vec<StoragePortion> = by_label.into_values().collect();
+        // Heaviest first, then by label so the order is stable for a reader comparing two runs.
+        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.label.cmp(&b.label)));
+        Ok(rows)
+    }
+
+    /// One compact line naming the three heaviest parts of the state, for the load-time log.
+    ///
+    /// THREE, not all nineteen: a line nobody reads to the end is a line that hides the next defect,
+    /// and every composition measured so far has had one part carrying most of the weight. The total
+    /// is always printed, so a reader can see at once whether the three explain it.
+    pub fn state_composition_summary(&self) -> String {
+        match self.state_composition() {
+            Ok(rows) => {
+                let total: usize = rows.iter().map(|r| r.bytes).sum();
+                let head = rows
+                    .iter()
+                    .take(3)
+                    .map(|r| format!("{} {}x{}B", r.label, r.entries, r.bytes))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{total}B total; {head}")
+            }
+            // NOT SWALLOWED INTO AN EMPTY STRING: a caller logging this would print a line that
+            // reads as "the state is made of nothing", which is a worse answer than none.
+            Err(e) => format!("unavailable ({e})"),
+        }
+    }
+
     /// Marks the CBOR snapshot stale after any MLS state mutation.
     ///
     /// INVARIANT: every method that mutates `self.provider` storage, `self.groups`,
@@ -249,6 +357,23 @@ impl MlsManager {
                     e
                 ),
             }
+
+            // WHAT THE STATE IS MADE OF, ONCE PER LOAD.
+            //
+            // One line per session, on the one seam every platform loads through, and it is here
+            // because the alternative has been paid for twice: `mls.bin` has been a P1 on SIZE
+            // alone, and both investigations had to INFER the composition from synthetic states
+            // because nothing could ask the running device. That inference was wrong twice in one
+            // evening on 2026-09-06 - once blaming key packages for a drop that deleting groups
+            // caused, once blaming epochs for a per-group cost a later measurement showed to be
+            // bounded.
+            //
+            // Nobody watches this line. It is the one a reader needs the moment a checkpoint starts
+            // costing seconds, and it costs one pass over a map already in memory.
+            log::info!(
+                "load_or_create: state composition - {}",
+                manager.state_composition_summary()
+            );
 
             Ok(manager)
         } else {
@@ -458,10 +583,6 @@ impl MlsManager {
     /// is still in the future, and that is a package this device minted moments ago on a machine
     /// with a skewed clock - the one thing that must NOT be deleted.
     pub fn prune_key_packages_expired_at(&self, now_secs: u64) -> Result<usize, MlsError> {
-        // `openmls_memory_storage` builds every key as `label || json(id) || u16 version`, so the
-        // label is a plain prefix and a scan attributes each entry to exactly one owner.
-        const KEY_PACKAGE_LABEL: &[u8] = b"KeyPackage";
-
         let storage = self.provider.storage();
         let mut values = storage
             .values
@@ -471,7 +592,7 @@ impl MlsManager {
         let mut undecodable = 0usize;
         let mut doomed: Vec<Vec<u8>> = Vec::new();
         for (k, v) in values.iter() {
-            if !k.starts_with(KEY_PACKAGE_LABEL) {
+            if !k.starts_with(b"KeyPackage") {
                 continue;
             }
             let Ok(bundle) = serde_json::from_slice::<KeyPackageBundle>(v) else {

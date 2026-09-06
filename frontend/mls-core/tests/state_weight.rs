@@ -13,80 +13,32 @@
 /// the SERVER's pool and the client then mints fifty more on the next fresh start. That is a story,
 /// not a measurement. This file turns it into one.
 ///
+/// EVERY FIGURE IN THIS FILE IS A FLOOR, AND 2026-09-06 IS WHY THAT WARNING IS NOW FIRST. A fresh
+/// group of one weighs 5 330 bytes here and epochs plateau at 17 kB; a real group on a phone that
+/// had lived through the campaign weighed ~490 kB, carried in `Tree` (member leaves) and
+/// `MessageSecrets` (per-sender ratchet history) - neither of which a synthetic group accumulates.
+/// Reasoning from these numbers to a real device's blob produced two wrong mechanisms in one
+/// evening. Use `MlsManager::state_composition`, which reads the device, for anything about a real
+/// state; use this only for what one ACTION costs.
+///
 /// IGNORED, BECAUSE IT IS A MEASUREMENT AND NOT AN ASSERTION. It prints a table and takes tens of
 /// seconds; a number is not a pass or a fail, and pinning today's bytes would only manufacture a
 /// failing test the first time a legitimate field is added.
 ///
 ///   cargo test --release --test state_weight -- --ignored --nocapture
-use mls_core::{MlsManager, PersistedState};
-use std::collections::BTreeMap;
+use mls_core::MlsManager;
 
-/// Every label `openmls_memory_storage` prefixes its keys with, in the order a reader wants them.
+/// The composition, read from the PRODUCT rather than recomputed here.
 ///
-/// A key is `label || serde_json(id) || u16 version`, built by that crate's `build_key_from_vec`,
-/// so the label is a plain byte PREFIX and a scan can attribute every entry to exactly one owner.
-/// That is the whole reason a prune is possible at all: the state is not opaque, and the bundles a
-/// device has minted are separable from the groups it belongs to.
-///
-/// A label that is a prefix of another would mis-attribute, so the list is checked for that below
-/// rather than trusted - `Psk` and `Tree` are short enough for it to be a real risk.
-const LABELS: &[&str] = &[
-    "KeyPackage",
-    "EncryptionKeyPair",
-    "SignatureKeyPair",
-    "EpochKeyPairs",
-    "Psk",
-    "Tree",
-    "GroupContext",
-    "ApplicationExportTree",
-    "InterimTranscriptHash",
-    "ConfirmationTag",
-    "MlsGroupJoinConfig",
-    "OwnLeafNodes",
-    "GroupState",
-    "QueuedProposal",
-    "ProposalQueueRefs",
-    "OwnLeafNodeIndex",
-    "EpochSecrets",
-    "ResumptionPsk",
-    "MessageSecrets",
-];
-
-/// Count and total byte weight of every storage entry, grouped by the label that owns it.
-///
-/// WEIGHING THE PARTS IS THE ONLY THING THAT TURNS "the blob is big" INTO A FIX. A total says a
-/// prune is needed; a breakdown says WHAT the prune must delete, and whether deleting it is even
-/// allowed. Both numbers are kept per label because they answer different questions - 10 000 cheap
-/// entries and 10 expensive ones are the same megabytes and not the same defect.
-fn composition(m: &MlsManager) -> BTreeMap<String, (usize, usize)> {
-    let bytes = m.save_state().expect("save_state");
-    let state: PersistedState =
-        ciborium::from_reader(bytes.as_slice()).expect("a state we just wrote must decode");
-    let mut by_label: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    for (k, v) in &state.storage_values {
-        // Longest match wins, so `Tree` cannot steal an `ApplicationExportTree` key.
-        let label = LABELS
-            .iter()
-            .filter(|l| k.starts_with(l.as_bytes()))
-            .max_by_key(|l| l.len())
-            .map(|l| (*l).to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "UNKNOWN({})",
-                    String::from_utf8_lossy(&k[..k.len().min(24)])
-                )
-            });
-        let e = by_label.entry(label).or_insert((0, 0));
-        e.0 += 1;
-        e.1 += k.len() + v.len();
-    }
-    by_label
-}
-
+/// This file used to carry its own copy of the label list and its own scan. That is exactly the
+/// duplication that lets a measurement and the thing it measures drift apart, and the labels are a
+/// fact about `openmls_memory_storage` rather than about this test - so `MlsManager` owns them and
+/// this asks. `state_composition` is also what the load-time log line prints, so what a reader sees
+/// on a phone and what this table prints can never disagree.
 /// Prints the breakdown, widest first, with each label's share of the whole.
 fn print_composition(title: &str, m: &MlsManager) {
-    let by_label = composition(m);
-    let total: usize = by_label.values().map(|(_, b)| *b).sum();
+    let rows = m.state_composition().expect("composition");
+    let total: usize = rows.iter().map(|r| r.bytes).sum();
     println!();
     println!("{title}");
     println!("{}", "-".repeat(96));
@@ -94,13 +46,14 @@ fn print_composition(title: &str, m: &MlsManager) {
         "{:<26} {:>8} {:>14} {:>12} {:>8}",
         "label", "entries", "bytes", "each", "share"
     );
-    let mut rows: Vec<_> = by_label.into_iter().collect();
-    rows.sort_by_key(|(_, (_, b))| std::cmp::Reverse(*b));
-    for (label, (count, bytes)) in rows {
+    for r in &rows {
         println!(
-            "{label:<26} {count:>8} {bytes:>14} {:>12} {:>7.1}%",
-            bytes / count.max(1),
-            100.0 * bytes as f64 / total.max(1) as f64
+            "{:<26} {:>8} {:>14} {:>12} {:>7.1}%",
+            r.label,
+            r.entries,
+            r.bytes,
+            r.bytes / r.entries.max(1),
+            100.0 * r.bytes as f64 / total.max(1) as f64
         );
     }
     println!("{:<26} {:>8} {:>14}", "TOTAL (entries only)", "", total);
@@ -296,5 +249,85 @@ fn what_one_key_package_costs_across_every_label_it_touches() {
         "nothing deletes a local bundle that is never claimed. Divide 19 548 753 by the figure"
     );
     println!("above to get the number of bundles that would explain the phone's blob.");
+    println!();
+}
+
+/// WHAT AN EPOCH COSTS, WHICH IS THE FIGURE THE 2026-09-06 BLOG ANALYSIS GOT WRONG.
+///
+/// `what_a_state_weighs_per_key_package_and_per_group` measures a group of ONE with no history and
+/// reports ~5.3 kB. That number was labelled a FLOOR in its own comment and then reasoned from as
+/// if it were representative, which produced a backlog entry attributing a 20 MB `mls.bin` mostly
+/// to key packages.
+///
+/// The field refuted it. Sweeping 42 abandoned throwaway groups off a Mi 9T took `mls.bin` from
+/// 20 812 360 to 8 018 495 bytes - **12.8 MB, 61%, freed by deleting groups** - and left five
+/// groups behind holding roughly 1.6 MB each. Three hundred times the floor. What a real group
+/// carries and a fresh one does not is EPOCHS: `EpochKeyPairs`, `MessageSecrets`, `EpochSecrets`
+/// and `ResumptionPsk` are all stored per epoch, and a group hammered by a healing campaign goes
+/// through hundreds.
+///
+/// This isolates that. The membership is held CONSTANT - one device added, then removed, over and
+/// over - so every byte of the slope is epoch and none of it is member count, which the round above
+/// cannot separate.
+#[test]
+#[ignore = "measurement, not an assertion: run explicitly with --release --nocapture"]
+fn what_an_epoch_costs_at_constant_membership() {
+    let mut alice = make_device("alice", "weigh-epochs");
+    alice
+        .create_group("weigh-churn".to_string())
+        .expect("create the churn group");
+
+    // A resident so the group is never empty, and never touched again.
+    let resident = make_device("resident", "weigh-r")
+        .generate_key_package()
+        .expect("kp");
+    alice
+        .add_members_bulk("weigh-churn", &[resident.as_slice()])
+        .expect("add the resident");
+    alice
+        .merge_pending_commit_for("weigh-churn")
+        .expect("confirm");
+
+    println!();
+    println!("epochs at CONSTANT membership - one device added then removed, repeatedly");
+    println!("{}", "-".repeat(96));
+
+    let mut before = weigh(&alice);
+    for round in 1..=4 {
+        for i in 0..10 {
+            let tag = format!("churn-{round}-{i}");
+            let kp = make_device(&tag, "weigh-c")
+                .generate_key_package()
+                .expect("kp");
+            alice
+                .add_members_bulk("weigh-churn", &[kp.as_slice()])
+                .expect("add the churn device");
+            alice
+                .merge_pending_commit_for("weigh-churn")
+                .expect("confirm the add");
+            let identity = format!("{tag}:weigh-c");
+            alice
+                .remove_members_for_devices("weigh-churn", &[identity.as_str()])
+                .expect("remove the churn device");
+            alice
+                .merge_pending_commit_for("weigh-churn")
+                .expect("confirm the remove");
+        }
+        let after = weigh(&alice);
+        // 10 add/remove pairs is 20 epochs, and the membership is exactly what it was.
+        report(&format!("+20 epochs (round {round})"), before, after, 20);
+        before = after;
+    }
+
+    println!("{}", "-".repeat(96));
+    println!(
+        "final: {} bytes at epoch {}",
+        weigh(&alice),
+        alice.get_epoch("weigh-churn").unwrap_or(0)
+    );
+    print_composition("composition after the churn", &alice);
+    println!();
+    println!("Multiply the per-epoch figure by the epochs a campaign group really reaches, and");
+    println!("compare with the 1.6 MB a group was measured at on the phone.");
     println!();
 }
