@@ -11,6 +11,31 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Fixed - a backgrounded phone kept two MLS engines on one file for minutes after the app opened
+
+Android runs two MLS engines over one `mls.bin`: the WebView one, in the app, and the JNI one behind
+the push service. They share no lock. What keeps them apart is a single check - if the app is in the
+foreground, the push returns and lets the WebSocket handle the message.
+
+**That check was made once, when the push arrived, and the work it protects runs for minutes.** When
+a phone comes back from an outage, every message it missed arrives at once; they are decrypted one
+at a time, and each costs an Argon2 round trip - about thirty seconds on a mid-range phone. Open the
+app anywhere inside that queue and the WebView engine reconnects, drains the same messages, and
+every push still in the backlog then works against a ratchet that has already moved.
+
+Seen end to end on 2026-09-07: five messages arrive at 02:09:28, the service records the app coming
+to the foreground at 02:10:07, and the next push goes into the crypto anyway and comes back
+`SecretReuseError` at 02:10:13. The guard had answered forty seconds and two messages earlier.
+
+The question is now re-asked where the decision actually is - holding the state lock, immediately
+before the state is read and rewritten, after every wait that could have let the world change. The
+early check stays: it is what spares the whole pipeline when the app is already open, and the late
+one covers the window it cannot.
+
+A vitest guard holds both checks in place. It lives beside the other tests that read native sources
+because **nothing in this repository runs the Android unit tests** - no workflow and no Makefile
+target invokes Gradle's - so a Kotlin test would have been a gate that never fires.
+
 ### Fixed - a stale MLS snapshot could outrank a fresher one and win
 
 The web client tags every MLS snapshot with a monotonic number so that, when two writes race, the

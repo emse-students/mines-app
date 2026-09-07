@@ -155,6 +155,34 @@ and its test are on [dev-environment](infrastructure/dev-environment.md).
 
 ## CI and the chain that runs unattended
 
+### P2 - the Android unit tests are never run by anything, so one suite has been decorative since it was written (measured 2026-09-07)
+
+`frontend/src-tauri/gen/android/app/src/test/java/fr/emse/canari/PushDecryptLadderTest.kt` is a real
+JUnit suite over the background decrypt ladder - the order the FCM service tries its recoveries in,
+which is MLS behaviour on the platform where MLS defects are hardest to see. **No workflow and no
+Makefile target invokes Gradle's unit tests.** `android.yml` builds and signs; `make test` runs the
+gateway, delivery, frontend, harness and CI-script suites and nothing native. So the assertions in
+that file have never executed, on any machine, since the day they were committed.
+
+**What makes it a P2 rather than a P3.** A test nobody runs is not merely useless: it is read as
+coverage. The push ladder LOOKS guarded, so the next person to change it reasonably believes a gate
+is watching - which is worse than an area everybody knows is unguarded. The same trap covers every
+`.kt` and every `.swift` in the two native trees.
+
+**What was done instead, on 2026-09-07, and why it is not the fix.** The foreground-handover guard
+found that day needed a gate, and it got one in `frontend/src/lib/mobile/pushForegroundHandover.test.ts`
+- vitest reading the Kotlin SOURCE, the convention `nativeStrings` and `androidFcmManifest` already
+use, and one that actually runs. That reaches text, never behaviour: it can prove a call is written
+and never that it is reached.
+
+**The remedy, and its one real question.** `./gradlew testDebugUnitTest` in `android.yml` (or a
+`make test-android`) is a few lines. The question is where it belongs: `android.yml` is a
+`workflow_call` library reached only from `release.yml`, so a unit test placed there runs at RELEASE
+time - far too late to refuse a merge. Putting it in `ci.yml` means a JDK and a Gradle cache on every
+pull request that touches the native tree, which is the cost to weigh. Measure the cold run first;
+if it is under a couple of minutes behind the existing `changed native files` detector, it belongs
+in `ci.yml` beside the other suites, and `android.yml` keeps building only.
+
 ### P2 - a 7.3 TB RAID1 now has a sensor and still has no report, and nothing on that host can reach a human (measured 2026-09-03)
 
 **`mitv`'s mirror was monitored by nothing at all until 2026-09-03** - `mdmonitor.service` had
