@@ -11,6 +11,92 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Fixed - a backgrounded phone kept two MLS engines on one file for minutes after the app opened
+
+Android runs two MLS engines over one `mls.bin`: the WebView one, in the app, and the JNI one behind
+the push service. They share no lock. What keeps them apart is a single check - if the app is in the
+foreground, the push returns and lets the WebSocket handle the message.
+
+**That check was made once, when the push arrived, and the work it protects runs for minutes.** When
+a phone comes back from an outage, every message it missed arrives at once; they are decrypted one
+at a time, and each costs an Argon2 round trip - about thirty seconds on a mid-range phone. Open the
+app anywhere inside that queue and the WebView engine reconnects, drains the same messages, and
+every push still in the backlog then works against a ratchet that has already moved.
+
+Seen end to end on 2026-09-07: five messages arrive at 02:09:28, the service records the app coming
+to the foreground at 02:10:07, and the next push goes into the crypto anyway and comes back
+`SecretReuseError` at 02:10:13. The guard had answered forty seconds and two messages earlier.
+
+The question is now re-asked where the decision actually is - holding the state lock, immediately
+before the state is read and rewritten, after every wait that could have let the world change. The
+early check stays: it is what spares the whole pipeline when the app is already open, and the late
+one covers the window it cannot.
+
+A vitest guard holds both checks in place. It lives beside the other tests that read native sources
+because **nothing in this repository runs the Android unit tests** - no workflow and no Makefile
+target invokes Gradle's - so a Kotlin test would have been a gate that never fires.
+
+### Fixed - a stale MLS snapshot could outrank a fresher one and win
+
+The web client tags every MLS snapshot with a monotonic number so that, when two writes race, the
+older one is refused rather than overwriting the newer. **One path assigned that number in the wrong
+place**, and the guard then did the opposite of its job.
+
+Key-package generation hands a snapshot to a worker, which can keep it for up to 30 seconds and
+returns a state derived from it. Those returned bytes were numbered when they came BACK - dating a
+thirty-second-old capture to now. A checkpoint captured during that window carried a lower number,
+so the guard refused the fresher state and kept the older one. The comment above the call claimed
+the turn had "no interleaving await", which is true of the main-thread branch it was written for and
+false of the worker branch it also covered.
+
+Every capture is now numbered at the instant it is taken, and a derived blob carries its origin's
+number across the await instead of minting a new one.
+
+**The refusal now names both paths.** It said only `v134 < stored v135`, which states the outcome
+and hides the question: which two writers overlapped is the entire finding, and without it the line
+sat in the cross-client campaign's captured logs for two days as dirt nobody could attribute. It is
+also a `warn` rather than a `log` now - two of one document's own flushes finishing out of order is
+a race, not a fact of life, and a line at `log` level is one its reader learns to skip.
+
+Native is unaffected: it persists through Rust and never used this counter.
+
+### Fixed - nobody could log in to the dev estate, on any client
+
+A TestFlight tester on the pre-release build was refused at login with **"Redirect URI Error"**,
+three times, and the app could do nothing about it: **the fault was in the identity provider's
+configuration, not in the client.** Behind it sat a second fault that broke the dev estate's WEB
+login as well, for everybody, and that the first one had been hiding.
+
+A packaged mobile client does not come back from the IdP to a URL, it comes back to its own custom
+scheme, `fr.emse.canari://callback`. A pre-release build authenticates against the `Canari Dev`
+OIDC provider - and that provider listed `fr.emse.canari.dev://callback` instead: **a scheme
+nothing in this repository declares.** The app's identifier is `fr.emse.canari` and the deep-link
+plugin registers that one scheme, so the dev provider was waiting for a callback no build could ever
+send. `Canari` and `Canari Local` both had the right entry; `Canari Dev` was the only one that
+differed, and it differed in the one dimension the three are supposed to share.
+
+Fixed on the provider: the real URI added with strict matching, and the dead `.dev` entry deleted -
+left in place it tells the next reader that a `.dev` scheme exists. Making the dev build answer to
+`.dev://` was the alternative and was rejected: it needs a separate bundle identifier, hence its own
+provisioning profile, App Store record and scheme declaration, where today a dev and a prod build
+differ only by `client_id` and API URL.
+
+**And that only uncovered the real one.** With the URI accepted, the same request still failed -
+`invalid_request`, "The request is otherwise malformed" - on the web callback too. `Canari Dev` had
+`grant_types = []`: it permitted **no OAuth grant at all**, so every authorization against the dev
+estate was refused whatever client asked. Its two siblings both carried the normal list; it was
+given the same one. A request that fails the redirect-URI check never reaches the grant check, so
+from a phone this was invisible until the first fault was gone - which is why the fix was verified
+by probing the authorize endpoint rather than by re-reading the field that had just been written.
+Both callbacks now answer `302` to the login flow.
+
+**No gate here could see it, and one now can.** `frontend/src/lib/mobile/oidcRedirectScheme.test.ts`
+asserts that every `scheme://host` `oidcRedirectUri()` returns is one `tauri.conf.json` actually
+registers, with host `callback` and the app's own identifier as the scheme. It fails on exactly the
+string that caused this. It cannot see Authentik's database, which lives outside this repository -
+that half is protected only by `docs/wiki/infrastructure/authentik.md`, which now carries the three
+providers side by side and the restore clause for both hand-added URIs.
+
 ### Added - a daily report that says when a stable reached the web but not a store
 
 Making the App Store deferral green fixes the web being held hostage by a review queue, and creates

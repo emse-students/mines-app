@@ -9,6 +9,13 @@ import { logcatReport, logcatSince, watch } from '../watch.mjs';
 import * as phone from '../phone.mjs';
 import { PORTS, peerNameFor } from '../names.mjs';
 
+// THE PHONE THIS RUNNER DRIVES, DECLARED. Every row below is written for A1 - `PORTS.A1`,
+// `peerNameFor('A1')` - and with a second phone on the bench `serial()` refuses to choose rather
+// than driving the wrong one and reporting success. So the name the rows already assume is stated
+// here once, which also sets `ANDROID_SERIAL` for every adb and atom spawned underneath. See
+// `useDevice` in `phone.mjs`. A row that ever needs A2 changes this line, deliberately.
+phone.useDevice('A1');
+
 phone.wake();
 phone.launch();
 await new Promise((r) => setTimeout(r, 5000));

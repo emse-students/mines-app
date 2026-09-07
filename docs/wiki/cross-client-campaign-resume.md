@@ -152,7 +152,7 @@ browser to `/if/flow/password-login/?next=<authorize>`: identification + passwor
   added by hand in the admin shell and lives only in Authentik's Postgres, so **a restore from a
   backup predating 2026-09-04 brings it back missing**. What it is, why it does not weaken the
   local/production split, and how to re-add it are in
-  [`infrastructure/authentik.md`](infrastructure/authentik.md#the-one-redirect-uri-a-mobile-client-needs-added-by-hand-on-2026-09-04),
+  [`infrastructure/authentik.md`](infrastructure/authentik.md#the-one-redirect-uri-a-mobile-client-needs-added-by-hand-on-two-providers),
   the only copy.
 
 - **THE PHONE'S APK MUST CARRY THE `local-estate` CAPABILITY, and `bun a1apk.mjs` is what puts it

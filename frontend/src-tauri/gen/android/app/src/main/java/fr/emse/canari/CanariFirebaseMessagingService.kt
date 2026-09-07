@@ -1984,6 +1984,36 @@ class CanariFirebaseMessagingService : FirebaseMessagingService() {
      * during the HTTP calls (fetchProtoFromBackend), so as not to block the other
      * FCM threads for the 5-11s a slow network fetch can take.
      */
+    /**
+     * Has the foreground MLS engine taken over since this push was accepted for processing?
+     *
+     * THE GUARD IN `onMessageReceived` IS EVALUATED ONCE, AND THE WORK IT GUARDS RUNS FOR MINUTES.
+     * That is the whole defect. Five pushes land in the same second when the radios come back; they
+     * are processed one at a time behind [MlsStateLock], and each costs an Argon2 round trip - on a
+     * Mi 9T, roughly thirty seconds each. The user opens the app somewhere inside that queue, the
+     * WebView engine reconnects its WebSocket and drains the same frames, and every remaining push
+     * in the backlog then decrypts against a ratchet the foreground has already advanced.
+     *
+     * MEASURED, NOT REASONED (NOTIF-10, 2026-09-07 02:09-02:10). All five pushes arrive at
+     * 02:09:28. At 02:10:07 the service logs `showNotification: app in foreground -> notification
+     * suppressed`, so the foreground had arrived - and the very next push still went into the JNI
+     * and came back `SecretReuseError` at 02:10:13. The guard had said yes forty seconds earlier.
+     *
+     * SO IT IS RE-ASKED HERE, WHICH IS WHERE THE DECISION ACTUALLY IS: under the lock, immediately
+     * before the state is read and rewritten, and after every wait that could have let the world
+     * change (the proto fetch is up to 11 s, the lock up to 5 s). Two engines with no shared lock
+     * writing one `mls.bin` is what the guard exists to prevent, and its own comment lists the
+     * price: lost KeyPackages, epoch gaps, `UseAfterEviction`.
+     *
+     * RETURNING null IS NOT A LOSS. The foreground engine has the frame - that is the premise of
+     * this check - and the WorkManager fallback is where work with no deadline belongs.
+     */
+    private fun foregroundTookOver(where: String): Boolean {
+        if (!MainActivity.isInForeground) return false
+        Log.d(TAG, "$where: foreground took over while this push waited -> yielding the MLS state to it")
+        return true
+    }
+
     private fun tryDecrypt(
         queuedMessageId: String?,
         groupId: String,
@@ -2024,6 +2054,7 @@ class CanariFirebaseMessagingService : FirebaseMessagingService() {
             return null
         }
         try {
+            if (foregroundTookOver("tryDecrypt")) return null
             val stateBytes = MlsContextLoader.loadMlsState(this)
             if (stateBytes == null) {
                 Log.e(TAG, "tryDecrypt: mls.bin absent -> abort")
@@ -2327,7 +2358,13 @@ class CanariFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         // 3) Apply the commits in memory and decrypt (brief lock: mls.bin + Argon2 via JNI).
+        //
+        // RE-ASKED HERE FOR THE REASON `foregroundTookOver` GIVES, and this path waits longer than
+        // the plain one before it gets here: an epoch read under the lock, then an HTTP fetch of
+        // every commit since. It is also the path that APPLIES commits, so it moves the state
+        // furthest - which makes it the worst one to run beside a live foreground engine.
         return withMlsStateLock(5) {
+            if (foregroundTookOver("catchup")) return@withMlsStateLock null
             val stateBytes = MlsContextLoader.loadMlsState(this) ?: return@withMlsStateLock null
             decryptProtoWithCommits(
                 stateBytes, ctx.userId, ctx.deviceId, groupId, commitsJson, cipherBytes,

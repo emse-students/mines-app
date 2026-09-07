@@ -1,5 +1,6 @@
 /**
- * Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on production.
+ * Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on THE ESTATE
+ * `SITE` NAMES - which since 2026-09-03 is the local one, not production.
  *
  *   bun cleanup.mjs [--dry]
  *
@@ -40,7 +41,7 @@ import { deleteChannel, deleteCommunity, enterCommunities, openCommunity } from 
 import { isGroupDebris } from './debris.mjs';
 import { deleteGroup } from './groupnav.mjs';
 import { psql } from './estate.mjs';
-import { PORTS, VENUE } from './names.mjs';
+import { PORTS, SITE, VENUE } from './names.mjs';
 
 /**
  * AN ALLOWLIST, and it is only as good as its enumeration. COMM-12 builds TWO venues per run and
@@ -105,7 +106,13 @@ const named = psql(`SELECT id, name FROM channel_workspaces ORDER BY "createdAt"
 
 const debris = named.filter((w) => DEBRIS.test(w.name));
 
-console.log(`[cleanup] ${named.length} communities on production, ${debris.length} match a check's venue`);
+// NAMES THE ESTATE, because this file DELETES. It said "on production" unconditionally while
+// routing through `estate.mjs`, which picks the local containers or production from `SITE` - so on
+// the local estate every line of this destructive tool's output named the wrong box. A reader
+// deciding whether a sweep is safe reads exactly this line.
+console.log(
+  `[cleanup] ${named.length} communities on ${SITE}, ${debris.length} match a check's venue`
+);
 for (const w of debris) console.log(`  ${w.id.slice(0, 8)}  ${w.name}`);
 
 // WHAT IT DID NOT MATCH IS THE HALF WORTH READING, and it used to print nothing at all. An

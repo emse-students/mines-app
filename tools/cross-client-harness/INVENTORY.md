@@ -30,7 +30,7 @@ One GESTURE each, or the vocabulary a gesture is built from. An atom ends on a f
 | `cdp.mjs` | Dependency-free Chrome DevTools Protocol driver for the cross-client test campaign |
 | `chat.mjs` | Chat primitives shared by every check in the campaign. |
 | `checks.mjs` | THE MANIFEST: which script covers which phase, and what each phase needs to be meaningful. |
-| `cleanup.mjs` | Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on production. |
+| `cleanup.mjs` | Deletes the communities, the salons AND the throwaway GROUPS a CRASHED check left on THE ESTATE |
 | `comm.mjs` | The vocabulary the COMM phase is written in: communities, channels, invitations, roles. |
 | `debris.mjs` | THE ONE ALLOWLIST OF THROWAWAY GROUP NAMES, shared by every sweep that may delete one. |
 | `deploy.mjs` | WAS PRODUCTION REDEPLOYED WHILE THE CHECK WAS RUNNING? - the one cause of transport failure that |
@@ -178,7 +178,7 @@ These test the HARNESS, not the product, and record nothing: they are the gated 
 | `archive/logcatclassify-selftest.mjs` | EVERY RULE OF THE PHONE CLASSIFIER, PINNED AGAINST A LINE WHOSE BUCKET IS KNOWN. |
 | `archive/lucide-selftest.mjs` | EVERY `.lucide-*` CLASS THIS RIG AIMS AT MUST BE ONE THE APPLICATION ACTUALLY RENDERS. |
 | `archive/origin-selftest.mjs` | NO CHECK MAY SPELL THE APPLICATION'S ORIGIN. `SITE` IS WHERE THE ESTATE IS NAMED. |
-| `archive/ports-selftest.mjs` | NO CHECK MAY SPELL A DEVTOOLS PORT. `names.mjs` IS WHERE A DEVICE IS NAMED. |
+| `archive/ports-selftest.mjs` | A RUNNER MUST SAY WHICH DEVICE IT IS ABOUT. `names.mjs` IS WHERE A DEVICE IS NAMED. |
 | `archive/ready-selftest.mjs` | The preflight's readiness probe, exercised on the pages it has to tell apart. |
 | `archive/residue-selftest.mjs` | Pins the border between what a native wipe must leave nothing of and what it may leave. |
 | `archive/servable-selftest.mjs` | The subset rule that decides HEAL-NEW-2 and -12, exercised on the sidebars it has to tell apart. |

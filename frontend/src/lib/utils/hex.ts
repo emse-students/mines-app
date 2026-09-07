@@ -61,24 +61,59 @@ const MLS_STATE_PLAIN_KEY_LEGACY = 'mls_autosave_plain';
 // version travels with the bytes via a WeakMap, so the async Argon2 step cannot reorder it. Only a
 // plain integer is persisted at rest - no groupId/epoch - so privacy is unchanged.
 let _snapshotSeq = 0;
-const _snapshotVersions = new WeakMap<Uint8Array, number>();
+const _snapshotVersions = new WeakMap<Uint8Array, { seq: number; writer: string }>();
 
-/** Tags `bytes` with the next monotonic snapshot version and returns the same reference. */
-export function tagMlsSnapshot(bytes: Uint8Array): Uint8Array {
-  _snapshotVersions.set(bytes, ++_snapshotSeq);
+/**
+ * WHO WROTE LAST, so a refusal can name BOTH sides of the race it just resolved.
+ *
+ * A guard that says "v134 lost to v135" states the outcome and hides the question. The campaign
+ * carried that line as unexplained dirt on four HEAL-REVOKE rows for two days, and it could not be
+ * attributed because nothing recorded which code path either number belonged to. A refusal is only
+ * a lead if it names the two paths that overlapped.
+ *
+ * A module global is the right scope: the version counter is one too, both describe THIS document's
+ * writers, and a second tab's writes are a different case the equality branch below already
+ * separates.
+ */
+let _lastAcceptedWriter = '(nothing yet this session)';
+
+/**
+ * Tags `bytes` with the next monotonic snapshot version and returns the same reference.
+ *
+ * MUST BE CALLED IN THE SAME SYNCHRONOUS TURN AS THE CAPTURE THAT PRODUCED `bytes`. The number
+ * orders CAPTURES, so tagging after an await gives a stale snapshot a fresh number and inverts the
+ * ordering it exists to establish - see `propagateMlsSnapshotVersion` for the one legitimate way to
+ * carry a version across an async transformation.
+ *
+ * @param writer which code path captured this - it is what a refusal will name.
+ */
+export function tagMlsSnapshot(bytes: Uint8Array, writer = 'unnamed'): Uint8Array {
+  _snapshotVersions.set(bytes, { seq: ++_snapshotSeq, writer });
   return bytes;
 }
 
-/** Copies the snapshot version from `from` to `to` (used when re-encrypting a plain snapshot). */
+/**
+ * Copies the snapshot version from `from` to `to`, for bytes DERIVED from an already-tagged capture.
+ *
+ * THIS IS HOW A VERSION CROSSES AN AWAIT HONESTLY. `to` is a transformation of `from` - re-encrypted,
+ * or returned by a worker that was handed `from` - so it describes the state as of `from`'s capture
+ * and must carry `from`'s number. Tagging `to` afresh instead dates a stale snapshot to now, which
+ * is the inversion the ordering exists to prevent.
+ */
 export function propagateMlsSnapshotVersion(from: Uint8Array, to: Uint8Array): Uint8Array {
   const v = _snapshotVersions.get(from);
   if (v !== undefined) _snapshotVersions.set(to, v);
   return to;
 }
 
+/** Which code path captured `bytes`, or undefined if they were never tagged. */
+export function mlsSnapshotWriter(bytes: Uint8Array): string | undefined {
+  return _snapshotVersions.get(bytes)?.writer;
+}
+
 /** Returns the snapshot version tagged onto `bytes`, or undefined if the bytes were never tagged. */
 export function mlsSnapshotVersion(bytes: Uint8Array): number | undefined {
-  return _snapshotVersions.get(bytes);
+  return _snapshotVersions.get(bytes)?.seq;
 }
 
 /**
@@ -177,19 +212,31 @@ export async function saveMlsStateEncrypted(userId: string, bytes: Uint8Array): 
       // line was one a reader learns to skip, which is the one that hides the next defect. Whether
       // dropping the second tab's write can lose state is a real question and is P2 in `backlog.md`;
       // it is not answered by the wording, but it is no longer hidden by it.
+      // NAMES BOTH PATHS, because a refusal that states only the outcome cannot be acted on. The
+      // two writers ARE the finding: this line is the visible end of two captures overlapping, and
+      // which two decides whether the overlap is legitimate coalescing or an ordering inversion.
+      const mine = mlsSnapshotWriter(bytes) ?? 'unnamed';
       if (version !== undefined && version < stored) {
-        console.log(`[MLS] Skipping stale MLS state write (v${version} < stored v${stored})`);
+        console.warn(
+          `[MLS] Skipping stale MLS state write (v${version} < stored v${stored}) - this write came ` +
+            `from ${mine}, the stored one from ${_lastAcceptedWriter}. Two captures were in flight ` +
+            `at once; if either tagged itself after an await, the numbers do not order the captures`
+        );
         return;
       }
       if (version !== undefined && version === stored) {
         console.log(
           `[MLS] Snapshot v${version} collides with the stored one - another writer reached this ` +
-            `version from the same seed, so the two are not comparable; not writing`
+            `version from the same seed, so the two are not comparable; not writing (this write ` +
+            `from ${mine})`
         );
         return;
       }
       store.put(bytes, MLS_STATE_ENCRYPTED_KEY);
-      if (version !== undefined) store.put(version, MLS_STATE_VERSION_KEY);
+      if (version !== undefined) {
+        store.put(version, MLS_STATE_VERSION_KEY);
+        _lastAcceptedWriter = mine;
+      }
     };
     verReq.onerror = () => reject(verReq.error);
     tx.oncomplete = () => resolve();
