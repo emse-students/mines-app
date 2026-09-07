@@ -11,6 +11,30 @@ which is also where every release up to and including v0.13.1 now lives.
 
 ## [Unreleased]
 
+### Fixed - a stale MLS snapshot could outrank a fresher one and win
+
+The web client tags every MLS snapshot with a monotonic number so that, when two writes race, the
+older one is refused rather than overwriting the newer. **One path assigned that number in the wrong
+place**, and the guard then did the opposite of its job.
+
+Key-package generation hands a snapshot to a worker, which can keep it for up to 30 seconds and
+returns a state derived from it. Those returned bytes were numbered when they came BACK - dating a
+thirty-second-old capture to now. A checkpoint captured during that window carried a lower number,
+so the guard refused the fresher state and kept the older one. The comment above the call claimed
+the turn had "no interleaving await", which is true of the main-thread branch it was written for and
+false of the worker branch it also covered.
+
+Every capture is now numbered at the instant it is taken, and a derived blob carries its origin's
+number across the await instead of minting a new one.
+
+**The refusal now names both paths.** It said only `v134 < stored v135`, which states the outcome
+and hides the question: which two writers overlapped is the entire finding, and without it the line
+sat in the cross-client campaign's captured logs for two days as dirt nobody could attribute. It is
+also a `warn` rather than a `log` now - two of one document's own flushes finishing out of order is
+a race, not a fact of life, and a line at `log` level is one its reader learns to skip.
+
+Native is unaffected: it persists through Rust and never used this counter.
+
 ### Fixed - nobody could log in to the dev estate, on any client
 
 A TestFlight tester on the pre-release build was refused at login with **"Redirect URI Error"**,

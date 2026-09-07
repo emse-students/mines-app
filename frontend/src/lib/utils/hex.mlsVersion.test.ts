@@ -171,19 +171,57 @@ describe('saveMlsStateEncrypted write-if-newer (IndexedDB)', () => {
     expect(said.join('\n')).not.toContain('stale');
   });
 
-  it('and a genuinely OLDER write still reads as stale, with the strict comparison', async () => {
-    const older = tagMlsSnapshot(new Uint8Array([1]));
-    const newer = tagMlsSnapshot(new Uint8Array([2]));
+  /**
+   * ON `console.warn` RATHER THAN `console.log`, and that is the point of the assertion.
+   *
+   * Two captures of one document were in flight at once. Unlike the collision above - two tabs,
+   * whose counters are simply not comparable - this one says the SAME writer's own flushes finished
+   * out of order, which is a race and not a fact of life. A line at `log` level is one a reader
+   * skips; this one has to accuse, because the fix is upstream of it.
+   */
+  it('and a genuinely OLDER write reads as stale, accuses, and names both writers', async () => {
+    const older = tagMlsSnapshot(new Uint8Array([1]), 'the-old-path');
+    const newer = tagMlsSnapshot(new Uint8Array([2]), 'the-new-path');
     await saveMlsStateEncrypted('user-1', newer);
 
     const said: string[] = [];
-    const spy = vi.spyOn(console, 'log').mockImplementation((...a) => void said.push(a.join(' ')));
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...a) => void said.push(a.join(' ')));
     await saveMlsStateEncrypted('user-1', older);
     spy.mockRestore();
 
     expect(said.join('\n')).toContain('stale');
     expect(said.join('\n')).toContain('<');
     expect(said.join('\n')).not.toContain('collides');
+    // WHICH TWO PATHS OVERLAPPED IS THE FINDING. Without both names the line states an outcome and
+    // hides the question, which is how it sat in the campaign's dirt for two days unattributed.
+    expect(said.join('\n')).toContain('the-old-path');
+    expect(said.join('\n')).toContain('the-new-path');
+  });
+
+  /**
+   * A VERSION MUST CROSS AN AWAIT BY PROPAGATION, NEVER BY A FRESH TAG.
+   *
+   * The key-package path handed a snapshot to a worker, kept it for up to 30 s, and tagged the
+   * result when it came back - dating a stale capture to now. A checkpoint captured DURING that
+   * window then carried a lower number and was refused against it, so the guard dropped the fresher
+   * state and kept the older one. This pins the shape rather than the call site.
+   */
+  it('a derived blob tagged AFTER an await outranks a fresher capture - propagation is the fix', async () => {
+    const captured = tagMlsSnapshot(new Uint8Array([1]), 'slow-path capture');
+    // ... time passes, and a checkpoint of genuinely newer state is captured and written ...
+    const fresher = tagMlsSnapshot(new Uint8Array([2]), 'checkpoint');
+    await saveMlsStateEncrypted('user-1', fresher);
+
+    // The wrong way: the slow path's result is numbered when it comes back.
+    const lateTagged = tagMlsSnapshot(new Uint8Array([3]), 'slow-path result');
+    expect(mlsSnapshotVersion(lateTagged)!).toBeGreaterThan(mlsSnapshotVersion(fresher)!);
+    await saveMlsStateEncrypted('user-1', lateTagged);
+    // The older state won, which is exactly the inversion the guard exists to prevent.
+    expect(store.get(MLS_STATE_ENCRYPTED_KEY)).toEqual(new Uint8Array([3]));
+
+    // The right way: the result carries the CAPTURE's number, so the fresher checkpoint outranks it.
+    const propagated = propagateMlsSnapshotVersion(captured, new Uint8Array([4]));
+    expect(mlsSnapshotVersion(propagated)!).toBeLessThan(mlsSnapshotVersion(fresher)!);
   });
 
   it('always writes untagged bytes (restore / migration have no concurrency)', async () => {

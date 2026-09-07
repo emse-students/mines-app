@@ -720,10 +720,10 @@ export class WebMlsService extends BaseMlsService {
   }
 
   /** WASM client wrapper - serialises current MLS state as plain CBOR (no Argon2). */
-  async saveStatePlain(): Promise<Uint8Array> {
+  async saveStatePlain(writer = 'checkpoint'): Promise<Uint8Array> {
     // Tag at the synchronous snapshot moment: this is the freshness reference the write-if-newer
     // guard uses, and it must be captured before the async encryption can let anything interleave.
-    return tagMlsSnapshot(this.client.save_state(undefined) as Uint8Array);
+    return tagMlsSnapshot(this.client.save_state(undefined) as Uint8Array, writer);
   }
 
   /** Encrypts a plain CBOR snapshot (worker when enabled, else main-thread WASM). */
@@ -810,7 +810,14 @@ export class WebMlsService extends BaseMlsService {
         try {
           console.log('[MLS] generateKeyPackage via worker (under mlsLock)');
           const mutationsAtSnapshot = this.liveMutations;
-          const snapshot = (this.client.save_state(deviceKeyB64) as Uint8Array).slice();
+          // TAGGED AT THE CAPTURE, NOT AT THE WRITE. The worker keeps these bytes for up to 30 s
+          // and returns a state DERIVED from them; numbering that result when it comes back would
+          // date a thirty-second-old capture to now and invert its order against every checkpoint
+          // taken in between. `propagateMlsSnapshotVersion` below is how a version crosses an await.
+          const snapshot = tagMlsSnapshot(
+            (this.client.save_state(deviceKeyB64) as Uint8Array).slice(),
+            'key packages (worker snapshot)'
+          );
           const workerResult = await this.runWorkerKeyPackageGeneration(
             deviceKeyB64,
             needed,
@@ -830,20 +837,28 @@ export class WebMlsService extends BaseMlsService {
             const minted = mintKeyPackages(this.client, needed);
             return {
               ...minted,
-              stateBytesToPersist: this.client.save_state(deviceKeyB64) as Uint8Array,
+              stateBytesToPersist: tagMlsSnapshot(
+                this.client.save_state(deviceKeyB64) as Uint8Array,
+                'key packages (live client, worker snapshot refused)'
+              ),
             };
           }
           return {
             fallback: workerResult.fallback,
             poolPackages: workerResult.poolPackages,
-            stateBytesToPersist: workerResult.state,
+            // Derived from `snapshot`, so it carries `snapshot`'s number and describes the state as
+            // of that capture - which is exactly what the swap above just proved is still current.
+            stateBytesToPersist: propagateMlsSnapshotVersion(snapshot, workerResult.state),
           };
         } catch (e) {
           console.warn('[MLS] key package worker failed, fallback to main thread path:', e);
           const minted = mintKeyPackages(this.client, needed);
           return {
             ...minted,
-            stateBytesToPersist: this.client.save_state(deviceKeyB64) as Uint8Array,
+            stateBytesToPersist: tagMlsSnapshot(
+              this.client.save_state(deviceKeyB64) as Uint8Array,
+              'key packages (live client, worker failed)'
+            ),
           };
         }
       });
@@ -853,14 +868,21 @@ export class WebMlsService extends BaseMlsService {
     } else {
       // Always generate a fresh static fallback KP for this device.
       ({ fallback, poolPackages } = mintKeyPackages(this.client, needed));
-      stateBytesToPersist = this.client.save_state(deviceKeyB64) as Uint8Array;
+      stateBytesToPersist = tagMlsSnapshot(
+        this.client.save_state(deviceKeyB64) as Uint8Array,
+        'key packages (main thread)'
+      );
     }
 
     if (stateBytesToPersist) {
       try {
-        // Tag here: this synchronous save-and-write turn has no interleaving await, so the version
-        // reflects the just-captured state and orders correctly against a concurrent encrypted flush.
-        await saveMlsState(this.userId, tagMlsSnapshot(stateBytesToPersist));
+        // ALREADY TAGGED, at the capture, by whichever of the four branches above produced these
+        // bytes. It was tagged HERE instead until 2026-09-07, under a comment claiming the turn had
+        // "no interleaving await" - true of the main-thread branch and false of the worker one,
+        // whose bytes come back from a round trip. So a stale capture was numbered as the newest
+        // write in the document, and a genuinely fresher checkpoint was then refused against it.
+        // That is the `Skipping stale MLS state write` line the campaign carried as dirt.
+        await saveMlsState(this.userId, stateBytesToPersist);
       } catch (e) {
         console.warn('[MLS] Auto-save failed in WASM mode:', e);
       }
