@@ -521,6 +521,22 @@ if (preInstrument.length) {
   console.log('  ' + preInstrument.map(([r]) => r).join(' '));
 }
 
+// A ROW THAT MEASURED A PHONE AND CANNOT NAME ITS BUILD, which `results.mjs` marks at the moment of
+// recording. It is not a wrong verdict - it is a verdict nobody can attribute to an APK, which is
+// the same weakness as a runner that has since changed and belongs in the same part of this report.
+// It happens when a check is run DIRECTLY rather than through `run.mjs`, whose preflight stamps
+// every row it spawns; the fix is to re-run the phase, not to reason about which APK it was.
+const unstamped = rows.filter((r) => latest.has(r) && latest.get(r).a1BuildUnstamped);
+if (unstamped.length) {
+  console.log(
+    `\n[rows] ${unstamped.length} verdict(s) measured a PHONE and carry no a1Build - run directly ` +
+      `rather than through \`bun archive/run.mjs\`, so nothing can say which APK they ran on:`
+  );
+  for (const r of unstamped) {
+    console.log('  ' + r.padEnd(14) + String(latest.get(r).verdict).padEnd(12) + latest.get(r).at);
+  }
+}
+
 if (sinceBuild) {
   const stale = rows.filter((r) => latest.has(r) && !String(latest.get(r).build).startsWith(sinceBuild));
   console.log('\n[rows] ' + stale.length + ' row(s) whose newest verdict was NOT taken on ' + sinceBuild);

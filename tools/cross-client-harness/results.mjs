@@ -413,6 +413,33 @@ export function record(id, verdict, detail) {
 
   const owedObservation = verdict === 'PASS' && !observed(detail);
   const stated = owedObservation ? 'UNOBSERVED' : verdict;
+
+  // A ROW THAT LOOKED AT A PHONE MUST BE ABLE TO NAME THAT PHONE'S BUILD, AND THIS IS THE ONLY
+  // PLACE THAT CAN KNOW IT DID NOT.
+  //
+  // `A1_BUILD` comes from the preflight in `run.mjs`, deliberately - the comment above it explains
+  // why a check must not read the phone itself. The gap that leaves is a check run DIRECTLY:
+  // `bun archive/notif.mjs 10` arms the phone, measures it, records `dirt_A1` - and carries no
+  // stamp at all, which is indistinguishable in the ledger from a row that never had a phone.
+  //
+  // MEASURED, ON THIS FILE'S OWN CAMPAIGN: NOTIF-10 was re-run three times on 2026-09-07 to prove an
+  // APK fix, and the deciding verdict landed with `a1Build: undefined`. The measurement was right
+  // and the ledger could not say which APK produced it, which is exactly the fault `a1Build` exists
+  // to close - restored silently, one convenient invocation at a time.
+  //
+  // MARKED, NOT REFUSED. A phone row costs ten to fifteen minutes and cutting one down at the
+  // recording moment destroys a measurement to make a point about provenance. So the row is kept,
+  // the gap is named IN it, and the line accuses - `rows.mjs` lists these separately, the way it
+  // already lists verdicts taken by a runner that has since changed.
+  const phoneEvidence = Object.keys(detail ?? {}).filter((k) => /^dirt_A\d+$/.test(k));
+  const unstamped = phoneEvidence.length > 0 && !A1_BUILD;
+  if (unstamped) {
+    console.warn(
+      `[${id}] carries ${phoneEvidence.join(', ')} but no a1Build - this row measured a phone and ` +
+        `cannot name the build it ran. Run the phase through \`bun archive/run.mjs\`, whose ` +
+        `preflight reads the phone once and stamps every row it spawns.`
+    );
+  }
   const row = {
     id,
     verdict: stated,
@@ -425,6 +452,7 @@ export function record(id, verdict, detail) {
     // BEFORE `detail`, so a runner that read the phone at its OWN arming moment overrides this one.
     // Four COMM checks do, and theirs is the more precise of the two.
     ...(A1_BUILD ? { a1Build: A1_BUILD.commit, a1BuiltAt: A1_BUILD.builtAt } : {}),
+    ...(unstamped ? { a1BuildUnstamped: phoneEvidence.join(' ') } : {}),
     ...detail,
     ...(owedObservation
       ? { claimedVerdict: verdict, unobserved: 'no report was gated into this verdict - see gate() in watch.mjs' }
