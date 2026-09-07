@@ -96,7 +96,7 @@ build selects its estate with `VITE_AUTHENTIK_CLIENT_ID` and an API URL, never w
 On 2026-09-07 `Canari Dev` differed from its siblings in BOTH fields at once, and the first fault
 hid the second. When comparing providers, compare every field, not the one the symptom names.
 
-### The one redirect URI a mobile client needs, added by hand - `Canari Local` 2026-09-04, `Canari Dev` 2026-09-07
+### The one redirect URI a mobile client needs, added by hand on two providers
 
 Both providers carry `fr.emse.canari://callback` as an **authorization** redirect URI with
 **strict** matching, alongside their web entry. Both were added by hand, in the admin shell, and
